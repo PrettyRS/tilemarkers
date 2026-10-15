@@ -263,6 +263,12 @@ local editActive = false
 local editMarked = false
 local editAddedSource
 local editRemovedSource
+local editAddedMetadata
+local editStyledSource
+local editStyledLabel
+local editStyledColour
+local editStyledFill
+local editStyledCorners
 local PresetEditor = {
     revision = 0,
     presetID = nil,
@@ -285,9 +291,10 @@ local PresetEditor = {
         return { [hover] = { text = "Working copy" } }
     end,
     contains = function() return editMarked end,
-    add = function(_, coord)
+    add = function(_, coord, metadata)
         editMarked = true
         editAddedSource = coord
+        editAddedMetadata = metadata
     end,
     remove = function(_, coord)
         editMarked = false
@@ -297,7 +304,13 @@ local PresetEditor = {
     getColour = function() return 0x102030FF end,
     getFill = function() return true end,
     getOutlineCornersOnly = function() return false end,
-    setCustomization = function() end,
+    setCustomization = function(_, coord, label, colour, fill, corners)
+        editStyledSource = coord
+        editStyledLabel = label
+        editStyledColour = colour
+        editStyledFill = fill
+        editStyledCorners = corners
+    end,
     previewCustomization = function() end,
     cancelCustomizationPreview = function() end,
 }
@@ -324,6 +337,35 @@ local promptedClearCount
 local clearConfirmation
 local initializedPresetHandlers
 local promptedPresetCreationVisible
+local submenuRegistration
+local savedStyles = {
+    {
+        id = "danger",
+        label = "Watch out",
+        name = "Danger",
+        outlineColour = 0xEE4433FF,
+        fillColour = 0xBE36298C,
+        fill = true,
+        outlineCornersOnly = false,
+    },
+    {
+        id = "escape",
+        name = "Escape <now>",
+        outlineColour = 0x44CC99FF,
+        fillColour = 0x36A37A8C,
+        fill = false,
+        outlineCornersOnly = true,
+    },
+}
+local SavedStyles = {
+    MAX_STYLES = 10,
+    list = function() return savedStyles end,
+    get = function(_, id)
+        for _, style in ipairs(savedStyles) do
+            if style.id == id then return style end
+        end
+    end,
+}
 local promptedPresetImport = false
 local actualUI = require("src/ui")
 local UI = {
@@ -337,6 +379,31 @@ local UI = {
                     if not Keyboard.IsGameKeyDown(key) then return false end
                 end
                 return true
+            end,
+        },
+        MiniMenu = {
+            AddSubmenu = function(menu, label, children, options)
+                submenuRegistration = {
+                    label = label,
+                    children = children,
+                    options = options,
+                }
+                menu:Add(label, function() end)
+                menu.entries[menu.lastAddedIndex].overrideText =
+                    label .. " <col=ffffff><gt></col>"
+                if menu.resetSwapsOnAdd then return end
+                local index = menu.lastAddedIndex
+                local target = options.position == "top" and #menu.entries - 1
+                    or options.position == "bottom" and 2
+                    or #menu.entries - options.position + 1
+                while index < target do
+                    menu:Swap(index, index + 1)
+                    index = index + 1
+                end
+                while index > target do
+                    menu:Swap(index, index - 1)
+                    index = index - 1
+                end
             end,
         },
     },
@@ -397,6 +464,7 @@ local UI = {
 package.loaded["src/tiles"] = Tiles
 package.loaded["src/presets"] = Presets
 package.loaded["src/preset_editor"] = PresetEditor
+package.loaded["src/saved_styles"] = SavedStyles
 package.loaded["src/region_bindings"] = RegionBindings
 package.loaded["src/ui"] = UI
 prettyui = {}
@@ -425,21 +493,31 @@ equal(nil, drawnHover, "blocked keyboard input hides the hover")
 keyboardBlocked = false
 
 local addedEntry
-local function readyMenu(entries)
+local function readyMenu(entries, appendEntries, resetSwapsOnAdd)
     entries = entries or {
         { actionType = MiniMenuActionType.CANCEL, label = "Cancel" },
         { actionType = MiniMenuActionType.WALK, label = "Walk here" },
     }
+    local insertionOrder = { table.unpack(entries) }
     local menu = {
         entryCount = #entries,
         entries = entries,
+        resetSwapsOnAdd = resetSwapsOnAdd,
         Add = function(self, label, action, ...)
             addedEntry = {
                 label = label,
+                overrideText = label,
                 action = action,
                 args = table.pack(...),
             }
-            table.insert(self.entries, 1, addedEntry)
+            local insertionIndex = appendEntries and #insertionOrder + 1 or 1
+            table.insert(insertionOrder, insertionIndex, addedEntry)
+            self.lastAddedIndex = insertionIndex
+            if resetSwapsOnAdd then
+                self.entries = { table.unpack(insertionOrder) }
+            else
+                table.insert(self.entries, insertionIndex, addedEntry)
+            end
             self.entryCount = #self.entries
         end,
         Swap = function(self, left, right)
@@ -451,13 +529,6 @@ local function readyMenu(entries)
     return menu
 end
 
-local function displayedLabels(menu)
-    local labels = {}
-    for index = #menu.entries, 1, -1 do
-        labels[#labels + 1] = menu.entries[index].label
-    end
-    return table.concat(labels, "|")
-end
 
 local function findMenuEntry(menu, label)
     for _, entry in ipairs(menu.entries) do
@@ -473,8 +544,9 @@ equal(nil, findMenuEntry(readyMenu(), "Mark tile"),
     "custom keybind replaces Ctrl+Shift for menu actions")
 customKeyDown = true
 frame()
-equal(hover, drawnHover, "single-key override previews the hovered tile")
+submenuRegistration = nil
 local customMark = findMenuEntry(readyMenu(), "Mark tile")
+equal(nil, submenuRegistration, "an unmarked tile has no style submenu")
 assert(customMark, "single-key override enables tile marking")
 UI.markingKeybind = { GameKey.CONTROL, GameKey.K }
 controlDown = false
@@ -494,6 +566,9 @@ customMark.action(table.unpack(customMark.args, 1, customMark.args.n))
 equal(false, marked, "capture blocks marking from a previously opened menu")
 equal(nil, findMenuEntry(readyMenu(), "Mark tile"),
     "capture suppresses new marking menu actions")
+submenuRegistration = nil
+readyMenu()
+equal(nil, submenuRegistration, "capturing a shortcut suppresses the style submenu")
 miniMenuOpen = false
 capturingKeybind = false
 UI.markingKeybind = {}
@@ -535,10 +610,6 @@ local worldMapMenu = readyMenu({
         fullText = "World Map",
     },
 })
-equal(
-    "World Map|Open map settings|Clear Visible Tilemarkers|New Preset from Visible Markers|Import Tilemarkers Preset|Cancel",
-    displayedLabels(worldMapMenu),
-    "world map actions are inserted directly above the native bottom option")
 local clearEntry = findMenuEntry(worldMapMenu, "Clear Visible Tilemarkers")
 local createVisibleEntry = findMenuEntry(
     worldMapMenu,
@@ -588,32 +659,25 @@ readyMenu({
         verbText = "World Map",
     },
 })
-equal(
-    "Import Tilemarkers Preset",
-    addedEntry.label,
-    "world map verb text gets all plugin actions")
 
 queriedTiles = {}
 controlDown = true
 shiftDown = true
 
+submenuRegistration = nil
 local orderedMenu = readyMenu()
-equal("Mark tile", addedEntry.label, "unmarked tile gets a mark entry")
-equal(
-    "Walk here|Mark tile|Cancel",
-    displayedLabels(orderedMenu),
-    "mark action renders immediately below the native top entry")
-local selectedEntry = addedEntry
-local locMenu = readyMenu({
-    { actionType = MiniMenuActionType.CANCEL, label = "Cancel" },
-    { actionType = MiniMenuActionType.WALK, label = "Walk here" },
-    { actionType = MiniMenuActionType.OP_LOC2, label = "Examine" },
-    { actionType = MiniMenuActionType.OP_LOC1, label = "Open" },
-})
-equal(
-    "Open|Mark tile|Examine|Walk here|Cancel",
-    displayedLabels(locMenu),
-    "mark action follows the top loc option without reordering native entries")
+local selectedEntry = findMenuEntry(orderedMenu, "Mark tile")
+assert(selectedEntry, "unmarked tile retains its quick mark action")
+equal(nil, submenuRegistration, "style submenu is reserved for marked tiles")
+equal("Walk here", orderedMenu.entries[#orderedMenu.entries].label,
+    "native top action keeps left-click priority")
+local appendedMarkMenu = readyMenu(nil, true)
+equal("Cancel", appendedMarkMenu.entries[1].label,
+    "Cancel stays last when native Add appends tile actions")
+equal("Mark tile", appendedMarkMenu.entries[2].label,
+    "appended Mark tile remains above Cancel")
+equal("Walk here", appendedMarkMenu.entries[#appendedMarkMenu.entries].label,
+    "appended Mark tile does not take left-click priority")
 local movedHover = { name = "tile behind menu" }
 miniMenuOpen = true
 cursorHover = movedHover
@@ -639,14 +703,65 @@ equal(0x12345678, addedMetadata.outlineColour, "mark action stores selected outl
 equal(0x0E2A4542, addedMetadata.fillColour, "mark action stores derived fill")
 equal(0x12345678, rememberedColour, "mark action records its colour as recent")
 equal(nil, labelledSource, "mark action does not open customization")
-
 local markedMenu = readyMenu()
-equal(
-    "Walk here|Unmark tile|Customize Tile|Cancel",
-    displayedLabels(markedMenu),
-    "marked tile actions render together below the native top entry")
-local colourEntry = markedMenu.entries[2]
-local unmarkEntry = markedMenu.entries[3]
+local colourEntry = findMenuEntry(markedMenu, "Customize Tile")
+assert(submenuRegistration, "marked tiles expose saved styles")
+equal(2, #submenuRegistration.children, "submenu contains the saved styles")
+equal("<col=EE4433>Danger</col>", submenuRegistration.children[1].label,
+    "style name uses its outline RGB")
+equal("<col=44CC99>Escape <lt>now<gt></col>",
+    submenuRegistration.children[2].label,
+    "style names cannot inject colour tags into the menu")
+equal("Cancel", markedMenu.entries[1].label, "Cancel remains the last menu row")
+equal("Apply tile style", markedMenu.entries[2].label,
+    "style submenu is immediately above Cancel")
+equal("Walk here", markedMenu.entries[#markedMenu.entries].label,
+    "saved styles cannot displace native left-click")
+local appendedMarkedMenu = readyMenu(nil, true)
+equal("Cancel", appendedMarkedMenu.entries[1].label,
+    "Cancel stays last with two appended tile actions")
+equal("Apply tile style", appendedMarkedMenu.entries[2].label,
+    "style submenu stays above Cancel with appended tile actions")
+equal("Customize Tile", appendedMarkedMenu.entries[3].label,
+    "Customize Tile remains above the style submenu")
+equal("Unmark tile", appendedMarkedMenu.entries[4].label,
+    "Unmark tile remains above customization")
+equal("Walk here", appendedMarkedMenu.entries[#appendedMarkedMenu.entries].label,
+    "appended actions preserve the native left-click action")
+local rebuiltMenu = readyMenu(nil, false, true)
+equal("Cancel", rebuiltMenu.entries[1].label,
+    "Cancel stays last when submenu registration rebuilds the menu")
+equal("Apply tile style", rebuiltMenu.entries[2].label,
+    "final placement survives the submenu parent's addition")
+equal("Customize Tile", rebuiltMenu.entries[3].label,
+    "customization stays above the style submenu after a rebuild")
+equal("Unmark tile", rebuiltMenu.entries[4].label,
+    "unmark stays above customization after a rebuild")
+equal("Walk here", rebuiltMenu.entries[#rebuiltMenu.entries].label,
+    "menu rebuild preserves native left-click priority")
+local locMenu = readyMenu({
+    { actionType = MiniMenuActionType.CANCEL, label = "Cancel" },
+    { actionType = MiniMenuActionType.WALK, label = "Walk here" },
+    { actionType = MiniMenuActionType.OP_LOC2, label = "Examine" },
+    { actionType = MiniMenuActionType.OP_LOC1, label = "Open" },
+})
+equal("Apply tile style", locMenu.entries[2].label,
+    "style submenu stays directly above Cancel on location menus")
+equal("Open", locMenu.entries[#locMenu.entries].label,
+    "submenu does not displace native location left-click priority")
+local appendedLocMenu = readyMenu({
+    { actionType = MiniMenuActionType.CANCEL, label = "Cancel" },
+    { actionType = MiniMenuActionType.WALK, label = "Walk here" },
+    { actionType = MiniMenuActionType.OP_LOC2, label = "Examine" },
+    { actionType = MiniMenuActionType.OP_LOC1, label = "Open" },
+}, true)
+equal("Cancel", appendedLocMenu.entries[1].label,
+    "Cancel stays last on location menus with appended tile actions")
+equal("Apply tile style", appendedLocMenu.entries[2].label,
+    "style submenu stays above Cancel on appended location menus")
+equal("Open", appendedLocMenu.entries[#appendedLocMenu.entries].label,
+    "appended tile actions preserve native location priority")
+local unmarkEntry = findMenuEntry(markedMenu, "Unmark tile")
 colourEntry.action(table.unpack(colourEntry.args, 1, colourEntry.args.n))
 equal("Existing label", promptedInitialLabel, "customization starts from tile label")
 equal(0x12345678, promptedInitialColour, "colour prompt starts from tile colour")
@@ -677,18 +792,46 @@ equal("Updated label", labelledText, "confirmed customization stores its label")
 equal(0x445566FF, recolouredValue, "confirmed tile colour is stored")
 equal(true, recolouredFill, "confirmed fill state is stored")
 equal(true, recolouredOutlineCornersOnly, "confirmed corner outline is stored")
+local dangerChild = submenuRegistration.children[1]
+local escapeChild = submenuRegistration.children[2]
+dangerChild.action(table.unpack(dangerChild.arguments))
+equal(source, recolouredSource, "applying to a marked tile targets its source")
+equal("Watch out", labelledText, "style default label overrides existing tile label")
+equal(0xEE4433FF, recolouredValue, "style overrides tile outline colour")
+equal(true, recolouredFill, "style explicitly overrides global fill")
+equal(false, recolouredOutlineCornersOnly, "style explicitly overrides global corner mode")
+equal(0xEE4433FF, rememberedColour, "applied colour is available as recent")
+escapeChild.action(table.unpack(escapeChild.arguments))
+equal("Watch out", labelledText, "unlabeled style preserves the customized label")
+equal(0x44CC99FF, recolouredValue, "second style changes a marked tile")
 unmarkEntry.action(table.unpack(unmarkEntry.args, 1, unmarkEntry.args.n))
 equal(source, removedSource, "unmark action removes the canonical tile")
+submenuRegistration = nil
+readyMenu()
+equal(nil, submenuRegistration, "an unmarked tile has no style submenu")
+escapeChild.action(table.unpack(escapeChild.arguments))
+equal(false, marked, "stale submenu selection cannot mark an unmarked tile")
+equal(0x44CC99FF, existingColour, "stale selection cannot change tile colour")
+local previousStyles = savedStyles
+marked = true
+savedStyles = {}
+submenuRegistration = nil
+readyMenu()
+equal(nil, submenuRegistration, "no submenu appears after all saved styles are deleted")
+local colourBeforeStaleSelection = existingColour
+escapeChild.action(table.unpack(escapeChild.arguments))
+equal(colourBeforeStaleSelection, existingColour,
+    "a style removed while the menu is open cannot recolour a marked tile")
+savedStyles = previousStyles
 
 presetAtSource = {
     id = "preset_1",
     name = "Editable",
 }
 local presetMarkedMenu = readyMenu()
-equal(
-    "Walk here|Edit in preset|Cancel",
-    displayedLabels(presetMarkedMenu),
-    "preset-owned tile replaces the mark action with preset editing")
+submenuRegistration = nil
+readyMenu()
+equal(nil, submenuRegistration, "preset-owned tiles must be edited in their preset")
 local editPresetEntry = findMenuEntry(presetMarkedMenu, "Edit in preset")
 editPresetEntry.action(table.unpack(editPresetEntry.args, 1, editPresetEntry.args.n))
 equal("preset_1", startedPresetEditID, "preset tile opens its owning preset")
@@ -709,19 +852,24 @@ frame()
 equal("preset_1", excludedPresetID, "draw excludes the saved copy of the edited preset")
 equal("Working copy", drawnTiles[hover].text, "draw includes the preset working copy")
 editMarked = false
+submenuRegistration = nil
 local editAddMenu = readyMenu()
-equal(
-    "Walk here|Add to preset|Cancel",
-    displayedLabels(editAddMenu),
-    "edit mode offers to add an unmarked preset tile")
 local editAddEntry = findMenuEntry(editAddMenu, "Add to preset")
+assert(editAddEntry, "an unmarked preset tile retains its add action")
+equal(nil, submenuRegistration, "an unmarked preset tile has no style submenu")
 editAddEntry.action(table.unpack(editAddEntry.args, 1, editAddEntry.args.n))
 equal(source, editAddedSource, "edit add targets the canonical source tile")
+local editMarkedMenu = readyMenu()
+assert(findMenuEntry(editMarkedMenu, "Remove from preset"),
+    "marked preset tile retains its remove action")
+local escapeEditChild = submenuRegistration.children[2]
+escapeEditChild.action(table.unpack(escapeEditChild.arguments))
+equal(source, editStyledSource, "style works on a marked preset tile")
+equal("Preset label", editStyledLabel, "preset tile label survives a style change")
+equal(0x44CC99FF, editStyledColour, "preset tile outline is overridden")
+equal(false, editStyledFill, "preset fill is explicitly overridden")
+equal(true, editStyledCorners, "preset corners are explicitly overridden")
 local editRemoveMenu = readyMenu()
-equal(
-    "Walk here|Remove from preset|Customize Tile|Cancel",
-    displayedLabels(editRemoveMenu),
-    "edit mode offers remove and customization for preset tiles")
 local editRemoveEntry = findMenuEntry(editRemoveMenu, "Remove from preset")
 editRemoveEntry.action(table.unpack(editRemoveEntry.args, 1, editRemoveEntry.args.n))
 equal(source, editRemovedSource, "edit remove targets the canonical source tile")

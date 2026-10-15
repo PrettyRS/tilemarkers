@@ -191,7 +191,11 @@ local prettyui = {
             end
             function window:AddSimpleButton(content, action, buttonOptions)
                 local button = { root = {}, action = action }
-                promptSwatches[#promptSwatches + 1] = button
+                if content == "" then
+                    promptSwatches[#promptSwatches + 1] = button
+                else
+                    promptButtons[content] = action
+                end
                 return button
             end
             function window:AddFancyButton(content, action, buttonOptions)
@@ -688,6 +692,7 @@ makeControl = function()
         child.options = options
         return child
     end
+    control.AddTitle = control.AddText
     control.AddTextField = addControl
     control.AddKeybindField = function(self, options)
         self.keybindOptions = options
