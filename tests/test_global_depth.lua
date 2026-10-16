@@ -699,6 +699,7 @@ makeControl = function()
     control.SetEntries = function() end
     control.SetSelected = function() end
     control.SetText = function() end
+    control.SetTooltip = function(self, value) self.tooltip = value end
     control.Show = function() end
     control.SetScrollPosition = function(self, position)
         self.scrollY = position
@@ -721,6 +722,7 @@ end
 
 UI.prettyui = {
     KeybindField = prettyui.KeybindField,
+    Window = prettyui.Window,
     SimpleView = {
         new = function(parent)
             local view = makeControl()
@@ -849,11 +851,15 @@ local function presetControl(sprite)
     end
 end
 UI.contentView.scrollY = 120
+local togglePanel = UI.presetPanelsByID.preset_1
 presetControl("EYE").action()
-expect(
-    UI.contentView.restoredScrollY,
-    120,
-    "preset toggle restores the previous scroll position")
+expect(UI.presetPanelsByID.preset_1, togglePanel,
+    "toggle reuses the existing preset panel")
+expect(togglePanel.destroyed, nil, "toggle does not destroy native controls")
+expect(UI.contentView.scrollY, 120, "toggle keeps scroll position")
+expect(presetControl("HIDE").tooltip, "Enable preset",
+    "toggled button updates its tooltip")
+expect(mountedPresetActive, false, "toggle deactivates the preset")
 UI:rebuildPresetPanels("preset_1")
 expect(
     UI.contentView.scrolledToChild,
@@ -924,6 +930,38 @@ expect(presetControl("PENCIL"), nil, "wide transition does not expose collapsed 
 presetControl(id.Sprite.RS3_ICON_ACCORDION_0).subscriptions[ui.Hook.ONCLICK]()
 expect(UI.presetPanelsByID.preset_1.height, wideCardHeight,
     "expanding restores normal card spacing in a wide panel")
+
+UI.presetHandlers.delete = function(presetID)
+    expect(presetID, "preset_1", "delete targets existing preset")
+    mountedPreset = nil
+    return true
+end
+presetControl("TRASH").action()
+promptButtons.Delete()
+local emptyPresetView = UI.contentView
+local emptyMessage = UI.presetEmptyText
+expect(emptyMessage.options.text, "No presets saved.", "empty list explains missing presets")
+UI:rebuildPresetPanels()
+expect(UI.contentView, emptyPresetView, "rebuilding empty list reuses the same placeholder")
+expect(UI.presetEmptyText, emptyMessage, "empty list does not duplicate native text flow rows")
+local oldCreateVisible = UI.presetHandlers.createVisible
+UI.presetHandlers.createVisible = function(name)
+    mountedPreset = { id = "next_preset", name = name }
+    return true, mountedPreset
+end
+expect(UI:promptForPresetCreation(true), true, "creation follows deleting the final preset")
+promptInput.value = "New route"
+promptButtons.Save()
+expect(emptyPresetView.destroyed, true, "leaving empty state destroys native placeholder flow")
+expect(UI.contentView ~= emptyPresetView, true, "new preset uses a fresh SimpleView")
+expect(UI.presetEmptyText, nil, "new content has no stale empty message")
+expect(#UI.contentView.addedComponents, 4,
+    "new content has only heading, actions, and the new preset card")
+expect(UI.contentView.scrolledToChild, UI.presetPanelsByID.next_preset,
+    "created preset remains focused after view rebuild")
+UI.presetHandlers.createVisible = oldCreateVisible
+mountedPreset = { id = "preset_1", name = "My preset" }
+UI:rebuildPresetPanels()
 
 presetControl("SETTINGS").action()
 expect(editOverlay ~= nil, true, "edit action mounts a PrettyUI panel overlay")

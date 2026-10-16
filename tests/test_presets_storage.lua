@@ -251,6 +251,16 @@ for _, expected in ipairs(largePresets) do
     assertPreset(expected, imported, "large import")
     assertPreset(expected, reload():get(imported.id), "large import reload")
 end
+local selectedID = largePresets[1].id
+local otherID = largePresets[2].id
+equal(true, Presets:setActive(selectedID, false), "large preset deactivates")
+equal(false, Presets:isActive(selectedID), "selected large preset stops rendering")
+equal(true, Presets:isActive(otherID), "other large presets remain active")
+equal(false, reload():isActive(selectedID), "large preset deactivation survives reload")
+equal(true, Presets:setActive(selectedID, true), "large preset reactivates")
+equal(true, reload():isActive(selectedID), "large preset reactivation survives reload")
+assertPreset(largePresets[1], reload():get(selectedID),
+    "toggle preserves the large preset's tiles")
 
 local editedLarge = largePresets[1]
 table.remove(editedLarge.tiles, 128)

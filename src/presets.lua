@@ -8,6 +8,7 @@ local storedData = PersistentDB:GetStructuredData(STORAGE_KEY)
 local Presets = {
     revision = 0,
     data = storedData or {},
+    tokens = {},
 }
 
 local function trim(value)
@@ -121,33 +122,45 @@ local function normalizeData(data)
 end
 
 Presets.data = normalizeData(Presets.data)
+if storedData ~= nil and storedData.version == STORAGE_VERSION then
+    for _, entry in ipairs(type(storedData.presets) == "table" and storedData.presets or {}) do
+        if type(entry) == "table" and type(entry.id) == "string"
+            and Presets.tokens[entry.id] == nil then
+            Presets.tokens[entry.id] = entry.token
+        end
+    end
+end
 
-local function storageData(data)
+local function storageData(data, previousTokens)
     local stored = {
         version = data.version,
         nextId = data.nextId,
         activeIds = {},
         presets = {},
     }
+    local tokens = {}
     for index, id in ipairs(data.activeIds) do
         stored.activeIds[index] = id
     end
     for presetIndex, preset in ipairs(data.presets) do
-        local token = Codec.encode(preset.name, preset.tiles)
+        local token = previousTokens[preset.id] or Codec.encode(preset.name, preset.tiles)
         if token == nil then return nil end
+        tokens[preset.id] = token
         stored.presets[presetIndex] = {
             id = preset.id,
             token = token,
         }
     end
-    return stored
+    return stored, tokens
 end
 
 function Presets:save()
     self.revision = self.revision + 1
-    local stored = storageData(self.data)
+    local stored, tokens = storageData(self.data, self.tokens)
     if stored == nil then return false end
-    return PersistentDB:SetStructuredData(STORAGE_KEY, stored)
+    if not PersistentDB:SetStructuredData(STORAGE_KEY, stored) then return false end
+    self.tokens = tokens
+    return true
 end
 
 if storedData ~= nil and storedData.version ~= STORAGE_VERSION then
@@ -249,6 +262,7 @@ function Presets:rename(id, name)
         return false, "Enter a preset name."
     end
     preset.name = name:sub(1, 32)
+    self.tokens[id] = nil
     self:save()
     return true, "Preset renamed."
 end
@@ -262,6 +276,7 @@ function Presets:updateTiles(id, tiles)
 
     local previousTiles = preset.tiles
     preset.tiles = normalized
+    self.tokens[id] = nil
     if not self:save() then
         preset.tiles = previousTiles
         return false, "Could not save preset changes."

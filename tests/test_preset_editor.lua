@@ -140,4 +140,44 @@ equal(false, preset.tiles[1].fill, "editing keeps the original preset fill untou
 equal(nil, preset.tiles[1].outlineCornersOnly, "editing keeps original inheritance untouched")
 Editor:cancel()
 
+local freeStanding = { level = 1, x = 3412, z = 3421 }
+local original = {
+    level = freeStanding.level, x = freeStanding.x, z = freeStanding.z,
+    label = "Original marker",
+    outlineColour = 0xABCDEF12,
+    fillColour = 0x10203040,
+    fill = false,
+    outlineCornersOnly = true,
+    outlineThickness = 5,
+}
+local directMarkerPresent = true
+local sourceTiles = {
+    exportCoords = function(_, coords)
+        equal(freeStanding, coords[1], "editor checks the canonical source coordinate")
+        return directMarkerPresent and { original } or {}
+    end,
+}
+equal(true, Editor:begin(preset, sourceTiles), "editor starts with direct marker access")
+equal(true, Editor:add(freeStanding, { outlineColour = 0x010203FF }),
+    "editor can add an existing direct marker")
+equal(true, directMarkerPresent, "staging a transfer leaves the original untouched")
+equal("Original marker", Editor:getLabel(freeStanding), "transfer retains the direct label")
+equal(0xABCDEF12, Editor:getColour(freeStanding), "transfer retains the direct style")
+equal(false, Editor:getFill(freeStanding), "transfer retains the direct fill setting")
+equal(true, Editor:getOutlineCornersOnly(freeStanding),
+    "transfer retains direct corner outlines")
+equal(5, Editor:export()[2].outlineThickness, "transfer retains direct outline thickness")
+equal(freeStanding, Editor:transferCoords()[1], "transfer tracks the source marker")
+local regionTarget = { name = "region target" }
+equal("Original marker", Editor:query(freeStanding, 0, {
+    { source = freeStanding, target = regionTarget },
+})[regionTarget].text, "working transfer renders at its region target")
+equal(true, Editor:remove(freeStanding), "removing staged tile cancels its transfer")
+equal(0, #Editor:transferCoords(), "removed tile no longer transfers its source")
+equal(true, directMarkerPresent, "removing staged tile leaves original untouched")
+Editor:add(freeStanding, {})
+Editor:cancel()
+equal(0, #Editor:transferCoords(), "cancel drops staged transfers")
+equal(true, directMarkerPresent, "cancel does not remove a direct marker")
+
 print("test_preset_editor: ok")

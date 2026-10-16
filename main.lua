@@ -73,6 +73,41 @@ local function createVisiblePreset(name)
     return true, result
 end
 
+local function tileKey(tile)
+    return string.format("%d:%d:%d", tile.level, tile.x, tile.z)
+end
+
+local function matchingDirectTiles(previousTiles, savedTiles)
+    if #previousTiles == 0 then return {} end
+    local byKey = {}
+    for _, tile in ipairs(savedTiles) do byKey[tileKey(tile)] = tile end
+    local coords = {}
+    for _, tile in ipairs(previousTiles) do
+        if byKey[tileKey(tile)] ~= nil then
+            coords[#coords + 1] = CoordGrid.new(
+                tile.level, tile.x // 64, tile.z // 64, tile.x % 64, tile.z % 64)
+        end
+    end
+    if #coords == 0 then return {} end
+    local matches = {}
+    for _, direct in ipairs(Tiles:exportCoords(coords)) do
+        local saved = byKey[tileKey(direct)]
+        if saved ~= nil and saved.label == direct.label
+            and saved.outlineColour == direct.outlineColour
+            and saved.fillColour == direct.fillColour
+            and saved.fill == direct.fill
+            and saved.outlineCornersOnly == direct.outlineCornersOnly
+            and saved.outlineThickness == direct.outlineThickness then
+            matches[tileKey(direct)] = true
+        end
+    end
+    local result = {}
+    for _, coord in ipairs(coords) do
+        if matches[tileKey(coord)] then result[#result + 1] = coord end
+    end
+    return result
+end
+
 UI:init(
     {
         list = function()
@@ -107,7 +142,7 @@ UI:init(
         startEdit = function(id)
             local preset = Presets:get(id)
             if preset == nil then return false, "Preset no longer exists." end
-            if not PresetEditor:begin(preset) then
+            if not PresetEditor:begin(preset, Tiles) then
                 return false, "Another preset is already being edited."
             end
             return true
@@ -116,11 +151,32 @@ UI:init(
             if not PresetEditor:isActive() then
                 return false, "No preset is being edited."
             end
+            local preset = Presets:get(PresetEditor.presetID)
+            if preset == nil then return false, "Preset no longer exists." end
+            local previousTiles = preset.tiles
             local success, message = Presets:updateTiles(
                 PresetEditor.presetID,
                 PresetEditor:export())
-            if success then PresetEditor:cancel() end
-            return success, message
+            if not success then return false, message end
+
+            local transfers = PresetEditor:transferCoords()
+            local transferredKeys = {}
+            for _, coord in ipairs(transfers) do
+                transferredKeys[tileKey(coord)] = true
+            end
+            for _, coord in ipairs(matchingDirectTiles(previousTiles, preset.tiles)) do
+                if not transferredKeys[tileKey(coord)] then
+                    transfers[#transfers + 1] = coord
+                end
+            end
+            if #transfers > 0 and not Tiles:removeAll(transfers) then
+                if not Presets:updateTiles(PresetEditor.presetID, previousTiles) then
+                    return false, "Could not transfer tiles or restore the previous preset."
+                end
+                return false, "Could not transfer the source tiles."
+            end
+            PresetEditor:cancel()
+            return true, message
         end,
         cancelEdit = function()
             PresetEditor:cancel()
