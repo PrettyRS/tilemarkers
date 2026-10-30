@@ -1,3 +1,10 @@
+-- TODO: remove this hotfix provided by Mod Jewel once it is no longer needed
+local function strip_img_tag(str)
+    if type(str)~='string' then
+        return ''
+    end
+    return str:gsub('<img=[^>]*>','IMAGETAG'):gsub('<sprite=[^>]*>','IMAGETAG')
+end   
 local Styles = require("src/styles")
 local Draw = require("src/draw")
 
@@ -396,7 +403,7 @@ function UI:startPresetEdit(presetID, presetName)
     })
     self.presetEditOverlay = overlay
     overlay:AddText({
-        text = "Editing tilemarker preset: " .. tostring(presetName or "Preset"),
+        text = "Editing tilemarker preset: " .. tostring(strip_img_tag(presetName) or "Preset"),
         height = 24,
         maxLines = 1,
         colour = 0xF2C66DFF,
@@ -497,13 +504,13 @@ function UI:rebuildPresetPanels(focusPresetID)
             tooltip = active and "Disable preset" or "Enable preset",
         })
         panel:AddText({
-            text = presetName,
+            text = strip_img_tag(presetName),
             inline = true,
             width = -(layout.padding * 2 + buttonStep * 2),
             widthAnchor = 1,
             height = layout.size,
             maxLines = 1,
-            tooltip = presetName,
+            tooltip = strip_img_tag(presetName),
         })
         local chevronSprite = collapsed and id.Sprite.RS3_ICON_ACCORDION_0
             or id.Sprite.RS3_ICON_ACCORDION_3
@@ -1066,7 +1073,7 @@ function UI:promptForPresetRename(presetID, presetName)
     })
     self.presetRenameWindow = prompt
     self.presetRenameInput = prompt:AddTextField({
-        text = presetName,
+        text = strip_img_tag(presetName),
         placeholder = "Preset name",
         maxLength = 32,
         onSubmit = function() self:finishPresetRename(true) end,
@@ -1133,7 +1140,7 @@ function UI:promptForPresetDelete(presetID, presetName)
     prompt:AddText({
         text = string.format(
             "Are you sure you want to delete \"%s\"? This cannot be undone.",
-            tostring(presetName or "preset")),
+            tostring(strip_img_tag(presetName) or "preset")),
         height = 48,
         maxLines = 2,
     })
@@ -1160,7 +1167,7 @@ function UI:promptForPresetExport(presetID, presetName)
     local x, y = centredPopupPosition(self, width, height)
     local prompt
     prompt = self.prettyui.Window.new(self.gameArea, {
-        title = "Export " .. tostring(presetName or "preset"),
+        title = "Export " .. tostring(strip_img_tag(presetName) or "preset"),
         x = x,
         y = y,
         width = width,
@@ -1549,7 +1556,7 @@ function UI:syncMarkers(tiles, hover, drawDistance)
             labels[#labels + 1] = {
                 coord = entry.coord,
                 fine = entry.coord:ToCoordFine(true),
-                text = text,
+                text = strip_img_tag(text),
                 config = labelTextConfig({
                     outlineColour = labelColour(style.outlineColour),
                     fontSize = self.labelSize,
