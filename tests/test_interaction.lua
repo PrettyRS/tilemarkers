@@ -32,7 +32,7 @@ local hover = {
 }
 local cursorHover = hover
 local mousePosition = { x = 100, y = 100 }
-local source = { name = "source" }
+local source = { name = "source", level = 0, x = 3300, z = 3301 }
 local playerCoord = { name = "player", level = 0, x = 10, z = 10 }
 local playerPosition = { x = 10 * 512 + 256, y = 0, z = 10 * 512 + 256 }
 local controlDown = false
@@ -56,6 +56,16 @@ Mouse = {
     IsAvailable = function() return true end,
     GetPosition = function() return mousePosition end,
 }
+CoordGrid = {
+    new = function(level, mapX, mapZ, localX, localZ)
+        return {
+            level = level,
+            x = mapX * 64 + localX,
+            z = mapZ * 64 + localZ,
+        }
+    end,
+}
+
 ScreenConvert = {
     ScreenToCoordGrid = function() return cursorHover end,
 }
@@ -114,14 +124,16 @@ local exportedCoords
 local visibleExportTiles = {
     { x = 3200, z = 3201, level = 0 },
 }
+local directOverlapTiles
 local allExportTiles = {
     { x = 3000, z = 3001, level = 0 },
 }
-local tilesCleared = false
+local batchRemoveSucceeds = true
 local Tiles = {
     query = function(_, coord, distance)
         queriedCoord = coord
         queriedDistance = distance
+        if marked then return { [hover] = { text = "Direct marker" } } end
         return queriedTiles
     end,
     contains = function(_, coord)
@@ -196,6 +208,10 @@ local Tiles = {
     end,
     removeAll = function(_, coords)
         clearedSources = coords
+        if not batchRemoveSucceeds then return false, 0 end
+        for _, coord in ipairs(coords) do
+            if coord == source then marked = false end
+        end
         return true, #coords
     end,
     export = function()
@@ -203,12 +219,10 @@ local Tiles = {
     end,
     exportCoords = function(_, coords)
         exportedCoords = coords
-        return visibleExportTiles
+        if coords[1] and coords[1].x == nil then return visibleExportTiles end
+        return directOverlapTiles or {}
     end,
-    clear = function()
-        tilesCleared = true
-        return true
-    end,
+    save = function() return true end,
 }
 
 local createdPresetName
@@ -221,6 +235,13 @@ local updatedPresetTiles
 local presetAtSource
 local startedPresetEditID
 local startedPresetEditName
+local presetSaveSucceeds = true
+local updateCount = 0
+local editablePreset = {
+    id = "preset_1",
+    name = "Editable",
+    tiles = {},
+}
 local Presets = {
     list = function() return {} end,
     isActive = function() return false end,
@@ -247,16 +268,14 @@ local Presets = {
         return presetAtSource
     end,
     get = function(_, id)
-        return id == "preset_1" and {
-            id = id,
-            name = "Editable",
-            tiles = {},
-        } or nil
+        return id == editablePreset.id and editablePreset or nil
     end,
     updateTiles = function(_, id, tiles)
         updatedPresetID = id
         updatedPresetTiles = tiles
-        return true, "Saved"
+        updateCount = updateCount + 1
+        if presetSaveSucceeds then editablePreset.tiles = tiles end
+        return presetSaveSucceeds, presetSaveSucceeds and "Saved" or "Could not save."
     end,
 }
 local editActive = false
@@ -269,11 +288,13 @@ local editStyledLabel
 local editStyledColour
 local editStyledFill
 local editStyledCorners
+local pendingTransfer = {}
 local PresetEditor = {
     revision = 0,
     presetID = nil,
     isActive = function() return editActive end,
-    begin = function(self, preset)
+    begin = function(self, preset, sourceTiles)
+        equal(Tiles, sourceTiles, "editor receives the standalone tile store")
         editActive = true
         self.presetID = preset.id
         self.revision = self.revision + 1
@@ -283,10 +304,12 @@ local PresetEditor = {
         editActive = false
         self.presetID = nil
         self.revision = self.revision + 1
+        pendingTransfer = {}
     end,
     export = function()
         return { { x = 3300, z = 3301, level = 0 } }
     end,
+    transferCoords = function() return pendingTransfer end,
     query = function()
         return { [hover] = { text = "Working copy" } }
     end,
@@ -295,10 +318,12 @@ local PresetEditor = {
         editMarked = true
         editAddedSource = coord
         editAddedMetadata = metadata
+        if marked then pendingTransfer = { coord } end
     end,
     remove = function(_, coord)
         editMarked = false
         editRemovedSource = coord
+        pendingTransfer = {}
     end,
     getLabel = function() return "Preset label" end,
     getColour = function() return 0x102030FF end,
@@ -877,6 +902,65 @@ equal(true, initializedPresetHandlers.saveEdit(), "save handler commits preset e
 equal("preset_1", updatedPresetID, "save targets the edited preset")
 equal(3300, updatedPresetTiles[1].x, "save commits the working tile set")
 equal(false, editActive, "successful save leaves preset edit mode")
+
+marked = true
+editMarked = false
+equal(true, initializedPresetHandlers.startEdit("preset_1"), "existing direct tile can enter edit mode")
+local transferEntry = findMenuEntry(readyMenu(), "Add to preset")
+transferEntry.action(table.unpack(transferEntry.args, 1, transferEntry.args.n))
+equal(source, pendingTransfer[1], "editor tracks the direct source for transfer")
+equal(true, marked, "editing does not remove the source marker before save")
+equal(true, initializedPresetHandlers.cancelEdit(), "cancel abandons the transfer")
+equal(true, marked, "cancel preserves the standalone marker")
+equal(0, #pendingTransfer, "cancel drops pending transfer")
+
+equal(true, initializedPresetHandlers.startEdit("preset_1"), "editor can retry a transfer")
+editMarked = false
+transferEntry = findMenuEntry(readyMenu(), "Add to preset")
+transferEntry.action(table.unpack(transferEntry.args, 1, transferEntry.args.n))
+presetSaveSucceeds = false
+clearedSources = nil
+equal(false, initializedPresetHandlers.saveEdit(), "failed preset save reports failure")
+equal(nil, clearedSources, "failed preset save does not remove source")
+equal(true, marked, "failed save leaves standalone tile intact")
+equal(true, editActive, "failed save keeps editor active for retry")
+presetSaveSucceeds = true
+batchRemoveSucceeds = false
+local savedBeforeTransfer = editablePreset.tiles
+local updatesBeforeRollback = updateCount
+equal(false, initializedPresetHandlers.saveEdit(), "failed source removal reports failure")
+equal(updatesBeforeRollback + 2, updateCount,
+    "failed source removal restores previous preset tiles")
+equal(savedBeforeTransfer, editablePreset.tiles,
+    "failed transfer restores the previously saved preset content")
+equal(true, marked, "failed source removal keeps original marker")
+equal(true, editActive, "failed transfer keeps editor active")
+batchRemoveSucceeds = true
+equal(true, initializedPresetHandlers.saveEdit(), "successful edit transfers direct marker")
+equal(source, clearedSources[1], "transfer removes canonical direct marker")
+equal(false, marked, "deactivating saved preset cannot expose a direct duplicate")
+equal(false, editActive, "successful transfer ends editing")
+equal(true, initializedPresetHandlers.setActive("preset_1", false),
+    "saved preset can be deactivated")
+frame()
+equal(nil, drawnTiles[hover],
+    "deactivated preset tile does not reappear as a direct marker")
+
+directOverlapTiles = { { level = 0, x = 3300, z = 3301 } }
+clearedSources = nil
+equal(true, initializedPresetHandlers.startEdit("preset_1"),
+    "legacy overlap can be reviewed in the editor")
+equal(true, initializedPresetHandlers.saveEdit(), "saving legacy overlap succeeds")
+equal(3300, clearedSources[1].x, "matching legacy direct marker transfers on explicit save")
+directOverlapTiles = { {
+    level = 0, x = 3300, z = 3301, outlineColour = 0x123456FF,
+} }
+clearedSources = nil
+equal(true, initializedPresetHandlers.startEdit("preset_1"),
+    "separately customized direct marker can be reviewed")
+equal(true, initializedPresetHandlers.saveEdit(), "saving distinct overlap succeeds")
+equal(nil, clearedSources, "differently styled direct marker remains independent")
+directOverlapTiles = nil
 
 -- Exercise the actual label renderer through main's Draw subscription, using
 -- PlayerEntity's native position/coordGrid contract (there is no coordFine).

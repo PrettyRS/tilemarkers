@@ -1,3 +1,10 @@
+-- TODO: remove this hotfix provided by Mod Jewel once it is no longer needed
+local function strip_img_tag(str)
+    if type(str)~='string' then
+        return ''
+    end
+    return str:gsub('<img=[^>]*>','IMAGETAG'):gsub('<sprite=[^>]*>','IMAGETAG')
+end   
 local Styles = require("src/styles")
 local Draw = require("src/draw")
 
@@ -246,7 +253,6 @@ function UI:reset()
         self.presetHandlers.cancelEdit()
     end
     self.canvas = nil
-    self.labelLayer = nil
     self.renderTiles = nil
     self.renderSettings = nil
     self.canvasHasLabels = false
@@ -312,9 +318,9 @@ function UI:destroy()
         local prompt = self[field]
         if prompt ~= nil and prompt.root ~= nil then prompt:Destroy() end
     end
-    if self.canvas ~= nil and self.labelLayer ~= nil
-        and ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_BOTTOM)
-            == self.labelLayer then
+    if self.canvas ~= nil and self.gameArea ~= nil
+        and ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
+            == self.gameArea then
         self.canvas:Destroy()
     end
     self:reset()
@@ -343,8 +349,10 @@ function UI:destroyContent()
     Event.Draw.Unsubscribe(CONTENT_EVENT_ID)
     if self.contentView ~= nil then self.contentView:Destroy() end
     self.contentView = nil
+    self.contentParent = nil
     self.presetPanels = {}
     self.presetPanelsByID = {}
+    self.presetEmptyText = nil
 end
 
 function UI:clearPresetPanels()
@@ -409,7 +417,7 @@ function UI:startPresetEdit(presetID, presetName)
     })
     self.presetEditOverlay = overlay
     overlay:AddText({
-        text = "Editing tilemarker preset: " .. tostring(presetName or "Preset"),
+        text = "Editing tilemarker preset: " .. tostring(strip_img_tag(presetName) or "Preset"),
         height = 24,
         maxLines = 1,
         colour = 0xF2C66DFF,
@@ -449,11 +457,21 @@ function UI:rebuildPresetPanels(focusPresetID)
     local layout = self.presetLayout
     local rightInset = layout.padding + layout.size
     local buttonStep = layout.size + layout.gap
+    local presets = self.presetHandlers and self.presetHandlers.list() or {}
+    if self.presetEmptyText ~= nil then
+        if #presets == 0 then
+            self.contentView:SetScrollPosition(scrollY)
+            return
+        end
+        -- PrettyUI's native AddText owns a flow row even after its component
+        -- is destroyed. Recreate the view when leaving the empty state.
+        self:mountContent(self.contentParent, focusPresetID)
+        return
+    end
     self:clearPresetPanels()
 
-    local presets = self.presetHandlers and self.presetHandlers.list() or {}
     if #presets == 0 then
-        self.presetPanels[1] = self.contentView:AddText({
+        self.presetEmptyText = self.contentView:AddText({
             text = "No presets saved.",
             height = 32,
             alignHorizontal = ui.AlignMode.CENTRE,
@@ -461,7 +479,6 @@ function UI:rebuildPresetPanels(focusPresetID)
         self.contentView:SetScrollPosition(scrollY)
         return
     end
-
     for _, preset in ipairs(presets) do
         local presetID = preset.id
         local presetName = preset.name
@@ -487,21 +504,27 @@ function UI:rebuildPresetPanels(focusPresetID)
         })
         self.presetPanels[#self.presetPanels + 1] = panel
         self.presetPanelsByID[presetID] = panel
-        panel:AddSpriteButton(active and "EYE" or "HIDE", function()
-            local success = self.presetHandlers.setActive(presetID, not active)
-            if success then self:rebuildPresetPanels() end
+        local eyeButton
+        eyeButton = panel:AddSpriteButton(active and "EYE" or "HIDE", function()
+            local nextActive = not active
+            local success = self.presetHandlers.setActive(presetID, nextActive)
+            if success then
+                active = nextActive
+                eyeButton:SetSprite(active and "EYE" or "HIDE")
+                eyeButton:SetTooltip(active and "Disable preset" or "Enable preset")
+            end
         end, {
             size = layout.size,
             tooltip = active and "Disable preset" or "Enable preset",
         })
         panel:AddText({
-            text = presetName,
+            text = strip_img_tag(presetName),
             inline = true,
             width = -(layout.padding * 2 + buttonStep * 2),
             widthAnchor = 1,
             height = layout.size,
             maxLines = 1,
-            tooltip = presetName,
+            tooltip = strip_img_tag(presetName),
         })
         local chevronSprite = collapsed and id.Sprite.RS3_ICON_ACCORDION_0
             or id.Sprite.RS3_ICON_ACCORDION_3
@@ -738,8 +761,9 @@ function UI:mountSettings(parent)
     self:updateStyleControls()
 end
 
-function UI:mountContent(parent)
+function UI:mountContent(parent, focusPresetID)
     self:destroyContent()
+    self.contentParent = parent
     local layout = presetLayout(parent.width)
     self.presetLayout = layout
     local rightInset = layout.padding + layout.size
@@ -797,7 +821,7 @@ function UI:mountContent(parent)
         offsetY = (layout.headingHeight - layout.size) / 2,
         tooltip = "Import preset",
     })
-    self:rebuildPresetPanels()
+    self:rebuildPresetPanels(focusPresetID)
     view.root:Subscribe(ui.Hook.ONRESIZE, function()
         if self.contentView ~= view then return end
         if presetLayout(parent.width) ~= layout then
@@ -813,24 +837,23 @@ end
 
 function UI:ensureMounted()
     local currentGameArea = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
-    local labelLayer = ui.Interfaces:GetComponent(
-        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_BOTTOM)
-    if currentGameArea == nil or labelLayer == nil then
+    if currentGameArea == nil then
         self:destroy()
         return false
     end
 
-    if currentGameArea ~= self.gameArea or labelLayer ~= self.labelLayer then
+    if currentGameArea ~= self.gameArea then
         self:destroy()
         self.gameArea = currentGameArea
-        self.labelLayer = labelLayer
     end
 
     if self.canvas ~= nil then
         return true
     end
 
-    self.canvas = ui.Canvas.new(self.labelLayer)
+    -- Native full-screen interfaces cover the game area but not the global
+    -- plugin overlay, so labels must share the game area's stacking order.
+    self.canvas = ui.Canvas.new(self.gameArea)
     self.canvas:SetPos(0, 0)
     self.canvas:SetSize(0, 0, 1.0, 1.0)
     self.canvas.clickthrough = true
@@ -1468,7 +1491,7 @@ function UI:promptForPresetRename(presetID, presetName)
     })
     self.presetRenameWindow = prompt
     self.presetRenameInput = prompt:AddTextField({
-        text = presetName,
+        text = strip_img_tag(presetName),
         placeholder = "Preset name",
         maxLength = 32,
         onSubmit = function() self:finishPresetRename(true) end,
@@ -1535,7 +1558,7 @@ function UI:promptForPresetDelete(presetID, presetName)
     prompt:AddText({
         text = string.format(
             "Are you sure you want to delete \"%s\"? This cannot be undone.",
-            tostring(presetName or "preset")),
+            tostring(strip_img_tag(presetName) or "preset")),
         height = 48,
         maxLines = 2,
     })
@@ -1562,7 +1585,7 @@ function UI:promptForPresetExport(presetID, presetName)
     local x, y = centredPopupPosition(self, width, height)
     local prompt
     prompt = self.prettyui.Window.new(self.gameArea, {
-        title = "Export " .. tostring(presetName or "preset"),
+        title = "Export " .. tostring(strip_img_tag(presetName) or "preset"),
         x = x,
         y = y,
         width = width,
@@ -1958,7 +1981,7 @@ function UI:syncMarkers(tiles, hover, drawDistance)
             labels[#labels + 1] = {
                 coord = entry.coord,
                 fine = entry.coord:ToCoordFine(true),
-                text = text,
+                text = strip_img_tag(text),
                 config = labelTextConfig({
                     outlineColour = labelColour(style.outlineColour),
                     fontSize = self.labelSize,

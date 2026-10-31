@@ -6,6 +6,8 @@ local Editor = {
     presetName = nil,
     tiles = {},
     customizationPreview = nil,
+    sourceTiles = nil,
+    transfers = {},
 }
 
 local function keyFor(level, x, z)
@@ -65,13 +67,15 @@ function Editor:isActive()
     return self.presetID ~= nil
 end
 
-function Editor:begin(preset)
+function Editor:begin(preset, sourceTiles)
     if self:isActive() or type(preset) ~= "table" then
         return false
     end
     self.presetID = preset.id
     self.presetName = preset.name
     self.tiles = {}
+    self.sourceTiles = sourceTiles
+    self.transfers = {}
     self.customizationPreview = nil
     for _, tile in ipairs(type(preset.tiles) == "table" and preset.tiles or {}) do
         local copied = copyTile(tile)
@@ -85,6 +89,8 @@ function Editor:cancel()
     self.presetID = nil
     self.presetName = nil
     self.tiles = {}
+    self.sourceTiles = nil
+    self.transfers = {}
     self.customizationPreview = nil
     self.revision = self.revision + 1
 end
@@ -95,7 +101,11 @@ end
 
 function Editor:add(coord, metadata)
     if not self:isActive() then return false end
-    local tile = copyTile({
+    local key = coordKey(coord)
+    local original = self.sourceTiles
+        and self.sourceTiles:exportCoords({ coord })[1]
+        or nil
+    local tile = original and copyTile(original) or copyTile({
         x = coord.x,
         z = coord.z,
         level = coord.level,
@@ -106,7 +116,8 @@ function Editor:add(coord, metadata)
         outlineCornersOnly = metadata and metadata.outlineCornersOnly,
         outlineThickness = metadata and metadata.outlineThickness,
     })
-    self.tiles[coordKey(coord)] = tile
+    self.tiles[key] = tile
+    self.transfers[key] = original and coord or nil
     self.revision = self.revision + 1
     return true
 end
@@ -114,6 +125,7 @@ end
 function Editor:remove(coord)
     if not self:contains(coord) then return false end
     self.tiles[coordKey(coord)] = nil
+    self.transfers[coordKey(coord)] = nil
     self.revision = self.revision + 1
     return true
 end
@@ -182,6 +194,16 @@ function Editor:export()
         return left.z < right.z
     end)
     return result
+end
+
+function Editor:transferCoords()
+    local coords = {}
+    for key, coord in pairs(self.transfers) do
+        if self.tiles[key] ~= nil then
+            coords[#coords + 1] = coord
+        end
+    end
+    return coords
 end
 
 function Editor:query(from, range, regionBindings)
