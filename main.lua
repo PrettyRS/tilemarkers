@@ -25,7 +25,6 @@ local function resetMarkers()
     UI.markerLabels = {}
 end
 
-log("loaded")
 Draw.Reset()
 
 local function visibleMarkerSources()
