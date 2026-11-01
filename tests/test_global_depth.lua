@@ -173,7 +173,9 @@ local prettyui = {
             end
             function window:AddColourPicker(pickerOptions)
                 promptColourPickerOptions = pickerOptions
-                local picker = { value = pickerOptions.value }
+                local picker = { value = pickerOptions.value, root = {} }
+                picker.swatchFrame = ui.Rectangle.new(picker.root)
+                picker.swatch = ui.Rectangle.new(picker.root)
                 function picker:GetValue() return self.value end
                 function picker:SetValue(value, notify)
                     self.value = value
@@ -191,7 +193,11 @@ local prettyui = {
             end
             function window:AddSimpleButton(content, action, buttonOptions)
                 local button = { root = {}, action = action }
-                promptSwatches[#promptSwatches + 1] = button
+                if content == "" then
+                    promptSwatches[#promptSwatches + 1] = button
+                else
+                    promptButtons[content] = action
+                end
                 return button
             end
             function window:AddFancyButton(content, action, buttonOptions)
@@ -507,12 +513,12 @@ UI.colourPromptWindow:Close()
 expect(closeCancelled, true, "window close invokes customization rollback")
 expect(UI:isPromptOpen(), false, "closed colour prompt is cleared")
 
-for index = 1, 6 do
+for index = 1, 32 do
     UI:rememberColour((index << 24) | 0x000000FF)
 end
-expect(#UI.recentColours, 5, "recent colour history is capped")
-expect(UI.recentColours[1], 0x060000FF, "newest recent colour stays first")
-expect(UI.recentColours[5], 0x020000FF, "oldest retained colour stays last")
+expect(#UI.recentColours, 8, "recent colour history is capped")
+expect(UI.recentColours[1], 0x200000FF, "newest recent colour stays first")
+expect(UI.recentColours[8], 0x190000FF, "oldest retained colour stays last")
 
 local createdPresetName
 local createdVisiblePresetName
@@ -688,6 +694,7 @@ makeControl = function()
         child.options = options
         return child
     end
+    control.AddTitle = control.AddText
     control.AddTextField = addControl
     control.AddKeybindField = function(self, options)
         self.keybindOptions = options
