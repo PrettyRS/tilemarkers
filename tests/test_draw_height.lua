@@ -7,25 +7,23 @@ Vector3 = { new = function(x, y, z) return { x = x, y = y, z = z } end }
 ShapeEntityAlignType = { NONE = 0, MODEL = 2 }
 ShapeData = { new = function() return {} end }
 local submitted, projected = {}, {}
-ShapeList = { CreateEntity = function()
+local nativeHeightOffset = 2000
+local function createShape(kind)
     local values = { alignType = ShapeEntityAlignType.NONE }
     local shape = setmetatable({}, {
         __index = values,
         __newindex = function(_, key, value)
-            assert(key ~= "translation", "native entities have no translation transform")
+            assert(kind ~= "entity" or key ~= "translation", "entities have no translation transform")
             if key == "coordGrid" then
                 assert(values.coordGrid == nil, "native anchor is assigned only once")
                 local centre = value:ToCoordFine(true).position
-                -- Documented model: coordGrid places an entity at the tile centre,
-                -- automatically at ground height. The docs do NOT guarantee that
-                -- native linked/bridge-plane selection equals GetGroundHeight on
-                -- this level, nor expose the actual native anchor for comparison.
-                -- This mock tests relative terrain geometry under that model. It
-                -- cannot prove the native anchor on bridges; verify that in-client.
+                -- A linked tile's native anchor can resolve to the floor below
+                -- even when the explicit terrain query returns the bridge deck.
                 local height, available = World.GetGroundHeight(value.level, centre.x, centre.z)
                 assert(available, "entity is not created until terrain is available")
-                values.anchor = Vector3.new(centre.x, height, centre.z)
+                values.anchor = Vector3.new(centre.x, height - nativeHeightOffset, centre.z)
             end
+            if key == "translation" then values.anchor = value end
             values[key] = value
         end,
     })
@@ -38,7 +36,11 @@ ShapeList = { CreateEntity = function()
     values.Destroy = function() values.destroyed = true; return true end
     submitted[#submitted + 1] = shape
     return shape
-end }
+end
+ShapeList = {
+    CreateEntity = function() return createShape("entity") end,
+    CreateInstance = function() return createShape("instance") end,
+}
 ScreenConvert = { Vector3ToScreen = function(p)
     projected[#projected + 1] = p
     return { x = p.x / 16, y = (p.z - p.y) / 16 }
@@ -91,7 +93,7 @@ end
 local function centreShapes()
     local result = {}
     for _, shape in ipairs(submitted) do
-        if not shape.destroyed and shape.coordGrid.x == minX and shape.coordGrid.z == minZ then
+        if not shape.destroyed and shape.anchor.x == minX + 256 and shape.anchor.z == minZ + 256 then
             result[#result + 1] = shape
         end
     end
@@ -147,22 +149,18 @@ for level = 0, 3 do
         verifyProbe(level, minX + 448, minZ + 256)
         verifyProbe(level, minX + 256, minZ + 448)
         oldSamples = samples
-        Draw.UpdateCamera()
+        Draw.UpdateCamera(Vector3.new(minX, 0, minZ))
         assert(samples == oldSamples, "unchanged split camera geometry reuses terrain samples")
     end
 end
 
-Draw.Reset()
-submitted = {}
 World.GetGroundHeight = function(level) return 100 + level * 800, true end
-local floors = {}
 for level = 0, 3 do
-    floors[#floors + 1] = { coordGrid = coord(level, minX, minZ) }
-end
-assert(Draw.Sync(floors))
-for _, shape in ipairs(submitted) do
-    for _, p in ipairs(shape.data.positions) do
-        near(p.y + shape.anchor.y, 131 + shape.coordGrid.level * 800, "ordinary floor keeps its level")
+    Draw.Reset()
+    submitted = {}
+    assert(Draw.Sync{ { coordGrid = coord(level, minX, minZ) } })
+    for _, p in ipairs(submitted[1].data.positions) do
+        near(p.y + submitted[1].anchor.y, 131 + level * 800, "ordinary floor keeps its level")
     end
 end
 

@@ -25,7 +25,6 @@ local function resetMarkers()
     UI.markerLabels = {}
 end
 
-log("loaded")
 Draw.Reset()
 
 local function visibleMarkerSources()
@@ -245,7 +244,7 @@ Event.Draw.Subscribe(EVENT_ID, function()
         UI:drawLabels(nil)
         return
     end
-    Draw.UpdateCamera()
+    Draw.UpdateCamera(player.position)
     UI:drawLabels(player.position, player.coordGrid.level)
 end)
 

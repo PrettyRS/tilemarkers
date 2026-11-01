@@ -8,28 +8,18 @@ local function vector(x, y, z)
     return { x = x, y = y, z = z }
 end
 
-local stats = { builds = 0, uploads = 0, properties = 0, samples = 0, projections = 0 }
+local stats = { builds = 0, uploads = 0, samples = 0, projections = 0 }
 Vector3 = { new = vector }
-ShapeEntityAlignType = { NONE = 0 }
 ShapeData = { new = function()
     stats.builds = stats.builds + 1
     return {}
 end }
 local submitted, failUploads = {}, 0
-local function createShape(name, kind)
-    local values = { name = name, kind = kind, uploads = 0, coordWrites = 0 }
+local function createShape(name)
+    local values = { name = name, uploads = 0 }
     local shape = setmetatable({}, {
         __index = values,
         __newindex = function(_, key, value)
-            assert(kind ~= "entity" or key ~= "translation",
-                "fixed entities have no translation transform")
-            assert(kind ~= "instance" or (key ~= "coordGrid" and key ~= "alignType"),
-                "instances use an explicit world-space translation")
-            stats.properties = stats.properties + 1
-            if key == "coordGrid" then
-                values.coordWrites = values.coordWrites + 1
-                expect(values.coordWrites, 1, "resident entities never move")
-            end
             values[key] = value
         end,
     })
@@ -51,11 +41,6 @@ local function createShape(name, kind)
         values.shapeData = data
         return true
     end
-    values.SetDrawDistance = function(_, distance)
-        assert(kind == "entity", "instances have no SetDrawDistance method")
-        stats.properties = stats.properties + 1
-        values.drawDistance = distance
-    end
     values.Destroy = function()
         assert(not values.destroyed, "entity is destroyed only once")
         values.destroyed = true
@@ -65,8 +50,7 @@ local function createShape(name, kind)
     return shape
 end
 ShapeList = {
-    CreateEntity = function(name) return createShape(name, "entity") end,
-    CreateInstance = function(name) return createShape(name, "instance") end,
+    CreateInstance = createShape,
 }
 World = { GetGroundHeight = function(_, x, z)
     stats.samples = stats.samples + 1
@@ -92,10 +76,8 @@ end
 local function shapesAt(at)
     local result = {}
     for _, shape in ipairs(submitted) do
-        local placed = shape.coordGrid
         local position = shape.translation
-        local matches = placed and placed.level == at.level and placed.x == at.x and placed.z == at.z
-            or position and position.x == at.x * 512 + 256 and position.z == at.z * 512 + 256
+        local matches = position and position.x == at.x * 512 + 256 and position.z == at.z * 512 + 256
         if not shape.destroyed and matches then
             result[#result + 1] = shape
         end
@@ -114,7 +96,7 @@ local function snapshot()
     return result
 end
 local function expectRetained(before, message)
-    for _, key in ipairs({ "builds", "uploads", "properties", "samples" }) do
+    for _, key in ipairs({ "builds", "uploads", "samples" }) do
         expect(stats[key], before[key], message .. " (" .. key .. ")")
     end
 end
@@ -123,6 +105,7 @@ package.loaded["src/draw"] = nil
 local Draw = require("src/draw")
 local westCoord, eastCoord = coord(10, 14), coord(11, 14)
 local west = marker(westCoord, 0x112233)
+local playerPosition = vector(10 * 512, 0, 14 * 512)
 west.fill = true
 assert(Draw.Sync{ west })
 local westMain = shapeWithLines(westCoord, 8)
@@ -132,7 +115,7 @@ expect(#westMain.shapeData.tris, 6, "fill has two triangles")
 expect(westMain.shapeData.positions[1].x, -256, "mesh starts at local tile edge")
 
 local before = snapshot()
-for _ = 1, 60 do Draw.UpdateCamera() end
+for _ = 1, 60 do Draw.UpdateCamera(playerPosition) end
 expectRetained(before, "ordinary markers do no per-frame mesh work")
 expect(stats.projections, before.projections, "ordinary markers need no camera projections")
 -- Different input objects with equivalent normalized styles are still unchanged.
@@ -158,8 +141,6 @@ west.outlineThickness = 5
 assert(Draw.Sync{ west })
 expect(stats.builds, before.builds, "non-geometric styles do not rebuild main geometry")
 expect(stats.uploads, before.uploads, "non-geometric styles do not upload main geometry")
-expect(stats.properties, before.properties + 3, "only changed depth, width and culling properties update")
-expect(westMain.coordWrites, 1, "style edits never reposition an entity")
 before = snapshot()
 assert(Draw.Sync{ west })
 expectRetained(before, "repeating property edits is a no-op")
@@ -182,19 +163,19 @@ expect(westSplit.lineWidth, 2, "shared edges use half the normal line width")
 before = snapshot()
 assert(Draw.Sync{ plain, east, west })
 expectRetained(before, "input order does not affect topology")
-for _ = 1, 60 do Draw.UpdateCamera() end
+for _ = 1, 60 do Draw.UpdateCamera(playerPosition) end
 expectRetained(before, "unchanged camera preserves split geometry")
 
 local mainUploads, plainUploads = westMain.uploads, plainShape.uploads
 zoom = 2
-Draw.UpdateCamera()
+Draw.UpdateCamera(playerPosition)
 expect(westSplit.shapeData.positions[1].x, 248, "camera zoom updates screen-space split inset")
 expect(eastSplit.shapeData.positions[1].x, -248, "both halves respond to camera zoom")
 expect(westMain.uploads, mainUploads, "camera never uploads main geometry")
 expect(plainShape.uploads, plainUploads, "camera never touches plain markers")
 before = snapshot()
 zoom = 2.01
-Draw.UpdateCamera()
+Draw.UpdateCamera(playerPosition)
 expectRetained(before, "camera movement below fine-unit precision does not rebuild geometry")
 
 assert(Draw.Sync{ west, plain })
@@ -263,70 +244,57 @@ west = marker(westCoord, 0x112233)
 east = marker(eastCoord, 0x112233)
 plain = marker(plainCoord, 0xABCDEF)
 assert(Draw.Sync{ west, east, plain })
-local originalWest = shapeWithLines(westCoord, 8)
-local originalEast = shapeWithLines(eastCoord, 8)
 plainShape = shapeWithLines(plainCoord, 8)
-west.customizing = true
-assert(Draw.Sync{ west, east, plain })
-expect(originalWest.destroyed, true, "opening customization removes the original visual")
-expect(originalEast.destroyed, true, "shared-edge neighbour becomes live too")
-local preview = shapeWithLines(westCoord, 8)
-expect(preview.kind, "instance", "customization uses dynamic geometry")
-expect(preview.translation.y, 114, "preview keeps the entity's ground anchor")
-expect(shapeWithLines(plainCoord, 8), plainShape, "unrelated marker is undisturbed")
 west.outlineColour = 0x44556680
 west.fill = true
 west.outlineCornersOnly = true
 assert(Draw.Sync{ west, east, plain })
+local preview = shapeWithLines(westCoord, 12)
 expect(preview.shapeData.rgba[1], 0x44556680, "preview colour and opacity update live")
 expect(#preview.shapeData.tris, 6, "preview can add fill")
-expect(#preview.shapeData.lines, 12, "preview corners exclude the shared edge")
 expect(#shapesAt(eastCoord), 2, "neighbour splits its edge for the preview colour")
+expect(shapeWithLines(plainCoord, 8), plainShape, "unrelated marker is undisturbed")
 west.fill = false
 assert(Draw.Sync{ west, east, plain })
-expect(#preview.shapeData.tris, 0, "preview clears fill immediately")
-local previewSplit = shapeWithLines(westCoord, 4)
-west.customizing = false
-assert(Draw.Sync{ west, east, plain })
-expect(preview.destroyed, true, "confirm removes the live main shape")
-expect(previewSplit.destroyed, true, "confirm removes the live split shape")
-local confirmed = shapeWithLines(westCoord, 12)
-expect(confirmed.kind, "entity", "confirm creates a fixed marker")
-expect(confirmed.shapeData.rgba[1], 0x44556680, "confirmed marker keeps the desired colour")
-expect(#confirmed.shapeData.tris, 0, "confirmed marker keeps fill disabled")
-west.customizing = true
-assert(Draw.Sync{ west, east, plain })
-local cancelled = shapeWithLines(westCoord, 12)
+expect(#shapeWithLines(westCoord, 12).shapeData.tris, 0, "preview clears fill immediately")
 west.outlineColour = east.outlineColour
 west.outlineCornersOnly = false
-west.fill = true
 assert(Draw.Sync{ west, east, plain })
 expect(#shapesAt(eastCoord), 1, "matching preview colour clears neighbour split")
-west.customizing = false
 west.outlineColour = 0x44556680
 west.outlineCornersOnly = true
-west.fill = false
 assert(Draw.Sync{ west, east, plain })
-expect(cancelled.destroyed, true, "cancel destroys the preview")
-local restored = shapeWithLines(westCoord, 12)
-expect(restored.kind, "entity", "cancel restores a fresh fixed marker")
-expect(restored.shapeData.rgba[1], 0x44556680, "cancel restores the previous colour")
-expect(#restored.shapeData.tris, 0, "cancel restores the previous fill")
+expect(shapeWithLines(westCoord, 12).shapeData.rgba[1], 0x44556680,
+    "cancel restores the previous colour")
 expect(#shapesAt(eastCoord), 2, "cancel restores neighbour shared-edge geometry")
-west.customizing = true
-assert(Draw.Sync{ west, east, plain })
-local unchangedPreview = shapeWithLines(westCoord, 12)
-west.customizing = false
-assert(Draw.Sync{ west, east, plain })
-expect(unchangedPreview.destroyed, true, "closing without changes still removes the preview")
-expect(shapeWithLines(westCoord, 12).kind, "entity", "unchanged customization restores an entity")
-west.customizing = true
-failUploads = 1
-assert(not Draw.Sync{ west, east, plain }, "preview transition reports upload failure")
-assert(Draw.Sync{ west, east, plain }, "preview transition retries missing geometry")
-expect(shapeWithLines(westCoord, 12).kind, "instance", "retry remains in preview mode")
+
+-- Culling measures horizontal distance to the nearest tile edge, not its centre.
+west.drawDistance = 100
+assert(Draw.Sync{ west, east })
+local minX, minZ = westCoord.x * 512, westCoord.z * 512
+local function checkVisible(x, z, expected)
+    Draw.UpdateCamera(vector(x, 999999, z))
+    for _, shape in ipairs(shapesAt(westCoord)) do
+        expect(shape.visible, expected, "main and split share the horizontal draw distance")
+    end
+end
+checkVisible(minX - 101, minZ + 256, false)
+checkVisible(minX - 100, minZ + 256, true)
+checkVisible(minX - 80, minZ - 80, false)
+checkVisible(minX - 60, minZ - 80, true)
+checkVisible(minX + 512 + 100, minZ + 256, true)
+checkVisible(minX + 512 + 101, minZ + 256, false)
+west.drawDistance = 200
+assert(Draw.Sync{ west, east })
+checkVisible(minX + 512 + 101, minZ + 256, true)
+assert(Draw.Sync{ west })
+east.outlineColour = west.outlineColour
+assert(Draw.Sync{ west, east })
+east.outlineColour = 0xABCDEF
+assert(Draw.Sync{ west, east })
+expect(shapeWithLines(westCoord, 4).visible, true, "new split geometry inherits visibility")
 Draw.Reset()
 for _, shape in ipairs(submitted) do
-    expect(shape.destroyed, true, "reset cleans up both rendering modes")
+    expect(shape.destroyed, true, "reset releases every marker")
 end
 print("test_draw: ok")

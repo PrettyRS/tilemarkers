@@ -53,10 +53,6 @@ local function applyProperties(retained, style, lineWidth)
         shape.lineWidth = lineWidth
         retained.lineWidth = lineWidth
     end
-    if not retained.dynamic and retained.drawDistance ~= style.drawDistance then
-        shape:SetDrawDistance(style.drawDistance)
-        retained.drawDistance = style.drawDistance
-    end
 end
 
 local function setShape(entry, part, shapeData)
@@ -68,22 +64,12 @@ local function setShape(entry, part, shapeData)
     if retained == nil then
         serial = serial + 1
         local name = string.format("tilemarkers_tile_%d", serial)
-        local shape
-        if entry.dynamic then
-            shape = ShapeList.CreateInstance(name)
-        else
-            shape = ShapeList.CreateEntity(name)
-        end
+        local shape = ShapeList.CreateInstance(name)
         if shape == nil then return false end
-        retained = { shape = shape, dynamic = entry.dynamic }
+        retained = { shape = shape }
         entry[part] = retained
-        if entry.dynamic then
-            shape.translation = entry.anchor
-        else
-            shape.alignType = ShapeEntityAlignType.NONE
-            -- Changing this property rebuilds the native visual; a resident never moves.
-            shape.coordGrid = entry.coordGrid
-        end
+        shape.translation = entry.anchor
+        shape.visible = entry.visible == true
     end
     if not retained.shape:SetShapeData(shapeData) then
         removeShape(entry, part)
@@ -142,9 +128,8 @@ local function ensureAnchor(entry)
     local x, z = entry.minX + HALF_TILE, entry.minZ + HALF_TILE
     local height = tileHeight(entry, x, z)
     if height == nil then return false end
-    -- coordGrid is documented to anchor at the centre's ground height. The API
-    -- does not expose its native height or specify linked bridge-plane selection;
-    -- equivalence with this explicit centre sample needs in-client verification.
+    -- Use this same explicit anchor for the mesh and its instance. Native
+    -- coordGrid anchoring can select the floor below a link-below bridge.
     entry.anchor = Vector3.new(x, height, z)
     return true
 end
@@ -487,7 +472,6 @@ function Draw.Sync(settingsList)
                 }
             end
             entry.style = normaliseStyle(settings)
-            entry.customizing = settings.customizing == true
             desired[key] = entry
         end
     end
@@ -501,24 +485,6 @@ function Draw.Sync(settingsList)
     splitTiles = {}
     -- All desired outlines are known before either member of a shared edge builds.
     for key, entry in pairs(tiles) do
-        -- A preview colour can change both sides of a shared edge. Keep the
-        -- immediate neighbours dynamic too, until the customization ends.
-        local dynamic = entry.customizing
-        if not dynamic then
-            for _, offset in pairs(NEIGHBOURS) do
-                local neighbour = desired[tileKey(
-                    entry.level, entry.tileX + offset.x, entry.tileZ + offset.z)]
-                if neighbour ~= nil and neighbour.customizing then
-                    dynamic = true
-                    break
-                end
-            end
-        end
-        if entry.dynamic ~= dynamic then
-            removeShape(entry, "main")
-            removeShape(entry, "split")
-            entry.dynamic = dynamic
-        end
         entry.mask = splitOutlineSides(entry, desired)
         entry.splitTarget = splitSignature(entry)
         if entry.mask ~= 0 then splitTiles[key] = entry end
@@ -527,7 +493,19 @@ function Draw.Sync(settingsList)
     return ready
 end
 
-function Draw.UpdateCamera()
+function Draw.UpdateCamera(playerPosition)
+    for _, entry in pairs(tiles) do
+        local dx = math.max(entry.minX - playerPosition.x, 0,
+            playerPosition.x - entry.minX - TILE_SIZE)
+        local dz = math.max(entry.minZ - playerPosition.z, 0,
+            playerPosition.z - entry.minZ - TILE_SIZE)
+        local visible = dx * dx + dz * dz <= entry.style.drawDistance * entry.style.drawDistance
+        if entry.visible ~= visible then
+            entry.visible = visible
+            if entry.main ~= nil then entry.main.shape.visible = visible end
+            if entry.split ~= nil then entry.split.shape.visible = visible end
+        end
+    end
     for _, entry in pairs(splitTiles) do
         updateSplit(entry, entry.splitTarget)
     end
