@@ -16,7 +16,10 @@ local PRESET_TOKEN_MAX_LENGTH = 9999
 
 local OUTLINE_COLOUR_STORAGE_KEY = "markerOutlineColour"
 local RECENT_COLOURS_STORAGE_KEY = "recentMarkerColours"
-local MAX_RECENT_COLOURS = 5
+local MAX_RECENT_COLOURS = 8
+local COLOUR_SWATCH_OUTER_SIZE = 36
+local COLOUR_SWATCH_INNER_PADDING = 4
+local COLOUR_SWATCH_INNER_SIZE = COLOUR_SWATCH_OUTER_SIZE - (COLOUR_SWATCH_INNER_PADDING * 2)
 local OUTLINE_THICKNESS_STORAGE_KEY = "markerOutlineThicknessTenths"
 local FONT_SIZE_STORAGE_KEY = "markerFontSize"
 local IGNORE_DEPTH_STORAGE_KEY = "markerIgnoreDepth"
@@ -1864,15 +1867,15 @@ function UI:promptForCustomization(
         end,
     })
     prompt:AddText({
-        text = "Choose the tile outline colour.",
-        width = 296,
-        height = 32,
+        text = "Choose the tile outline colour:",
+        width = 300,
+        height = COLOUR_SWATCH_OUTER_SIZE,
         maxLines = 1,
     })
     self.colourPromptPicker = prompt:AddColourPicker({
         inline = true,
-        width = 40,
-        height = 32,
+        width = COLOUR_SWATCH_OUTER_SIZE,
+        height = COLOUR_SWATCH_OUTER_SIZE,
         value = self.colourPromptColour,
         alphaSlider = true,
         windowTitle = "Tile colour",
@@ -1881,19 +1884,23 @@ function UI:promptForCustomization(
             previewColourPrompt(self)
         end,
     })
+    self.colourPromptPicker.swatch:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+    self.colourPromptPicker.swatch:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
+    self.colourPromptPicker.swatchFrame:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+    self.colourPromptPicker.swatchFrame:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
     prompt:AddText("Recently used colours")
     for index, colour in ipairs(self.recentColours) do
         local button = prompt:AddSimpleButton("", function()
             self.colourPromptPicker:SetValue(colour)
         end, {
             inline = index > 1,
-            width = 32,
-            height = 32,
+            width = COLOUR_SWATCH_OUTER_SIZE,
+            height = COLOUR_SWATCH_OUTER_SIZE,
             tooltip = "Use recent colour",
         })
         local swatch = ui.Rectangle.new(button.root)
-        swatch:SetPos(4, 4)
-        swatch:SetSize(24, 24)
+        swatch:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+        swatch:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
         swatch.fill = true
         swatch.rgba = colour
         swatch.clickthrough = true
