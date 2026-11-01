@@ -1967,7 +1967,6 @@ function UI:syncMarkers(tiles, hover, drawDistance)
         local style = entry.style or Styles.normalize(entry.metadata, self.globalStyle)
         settings[#settings + 1] = {
             coordGrid = entry.coord,
-            customizing = entry.metadata and entry.metadata.customizing,
             outlineColour = style.outlineColour,
             fillColour = style.fillColour,
             fill = style.fill,

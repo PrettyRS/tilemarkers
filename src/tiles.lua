@@ -253,7 +253,6 @@ function Tiles:previewCustomization(coord, label, colour, fill, outlineCornersOn
 
     local preview = normalizeMetadata(metadata)
     applyCustomization(preview, label, colour, fill, outlineCornersOnly)
-    preview.customizing = true
     self.customizationPreview = {
         key = coordKey(coord),
         metadata = preview,
