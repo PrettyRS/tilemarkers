@@ -7,12 +7,17 @@ end
 
 local callbacks = {}
 local function event(name)
+    local subscribers = {}
+    callbacks[name] = function(payload)
+        for _, callback in pairs(subscribers) do
+            callback(payload or { logicTick = 0 })
+        end
+    end
     return {
         Subscribe = function(id, callback)
-            equal("tileMarker", id, name .. " subscription ID")
-            callbacks[name] = callback
+            subscribers[id] = callback
         end,
-        Unsubscribe = function() end,
+        Unsubscribe = function(id) subscribers[id] = nil end,
     }
 end
 

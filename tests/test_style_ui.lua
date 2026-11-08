@@ -84,6 +84,7 @@ local function control(options)
     end
     function widget:AddSimpleButton(label, action)
         local button = { root = {}, click = action }
+        function button.root:SetWidth(width) self.width = width end
         self.simpleButtons[#self.simpleButtons + 1] = button
         if label ~= "" then self.buttons[label] = button end
         return button
@@ -106,6 +107,8 @@ local function control(options)
     end
     function widget:AddColourPicker(pickerOptions)
         local picker = { value = pickerOptions.value, closed = false }
+        picker.swatch = ui.Rectangle.new({})
+        picker.swatchFrame = ui.Rectangle.new({})
         function picker:GetValue() return self.value end
         function picker:SetValue(value) self.value = value end
         function picker:Close() self.closed = true end
@@ -150,6 +153,7 @@ UI.prettyui = {
         new = function(parent, options)
             local view = control(options)
             view.parent = parent
+            view.contentWidth = parent.width
             return view
         end,
     },

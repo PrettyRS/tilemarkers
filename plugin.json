@@ -5,7 +5,11 @@
   "hasSettingsIcon": true,
   "hasRibbonIcon": true,
   "requiredDependencies": {
-    "prettyui": 6398181
+    "prettyui": "prettyui"
   },
-  "optionalDependencies": {}
+  "optionalDependencies": {},
+  "optionalPermissions": ["httpAccess"],
+  "urls": {
+    "wiki": "https://runescape.wiki"
+  }
 }

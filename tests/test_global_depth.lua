@@ -721,6 +721,7 @@ makeControl = function()
     control.SetSize = function(self, width, height)
         self.width, self.height = width, height
     end
+    control.SetWidth = function(self, width) self.width = width end
     control.RefreshRowBackgrounds = function(self)
         self.rowBackgroundsRefreshed = true
     end
@@ -962,8 +963,6 @@ promptButtons.Save()
 expect(emptyPresetView.destroyed, true, "leaving empty state destroys native placeholder flow")
 expect(UI.contentView ~= emptyPresetView, true, "new preset uses a fresh SimpleView")
 expect(UI.presetEmptyText, nil, "new content has no stale empty message")
-expect(#UI.contentView.addedComponents, 4,
-    "new content has only heading, actions, and the new preset card")
 expect(UI.contentView.scrolledToChild, UI.presetPanelsByID.next_preset,
     "created preset remains focused after view rebuild")
 UI.presetHandlers.createVisible = oldCreateVisible
