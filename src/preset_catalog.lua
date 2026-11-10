@@ -43,6 +43,13 @@ local function cleanMessage(value)
     return value:gsub("<[^>]*>", ""):sub(1, 240)
 end
 
+local function orderTags(left, right)
+    local leftGeneral = left == "skilling" or left == "pvm"
+    local rightGeneral = right == "skilling" or right == "pvm"
+    if leftGeneral ~= rightGeneral then return leftGeneral end
+    return left < right
+end
+
 local function normalizeTags(value)
     local tags, seen = {}, {}
     if type(value) == "table" and value ~= Json.null then
@@ -56,7 +63,7 @@ local function normalizeTags(value)
             end
         end
     end
-    table.sort(tags)
+    table.sort(tags, orderTags)
     return tags
 end
 

@@ -129,6 +129,23 @@ equal(0, #catalog.rows, "valid empty object also means empty bucket")
 catalog:shutdown()
 equal(nil, subscribed, "shutdown unsubscribes tick handler")
 
+catalog = load()
+catalog:open(function() end)
+answer(requests[1], [[{"bucket":[
+    {"title":"Skilling","author":"A","page_name":"User:One","token":"TM2:one","tags":["woodcutting","agility"," SKILLING "]},
+    {"title":"PvM","author":"A","page_name":"User:Two","token":"TM2:two","tags":["slayer"," PvM ","boss"]},
+    {"title":"Both","author":"A","page_name":"User:Three","token":"TM2:three","tags":["agility","skilling","boss","pvm","SKILLING"]}
+]}]])
+equal("skilling", catalog.rows[1].tags[1], "skilling precedes alphabetically earlier skill tags")
+equal("pvm", catalog.rows[2].tags[1], "pvm precedes alphabetically earlier activity tags")
+local both = catalog.rows[3].tags
+equal(4, #both, "promoting general tags retains all distinct tags without duplicating them")
+equal("pvm", both[1], "general tags retain their relative alphabetical order")
+equal("skilling", both[2], "both general tags precede specific tags")
+equal("agility", both[3], "specific tags retain their relative alphabetical order")
+equal("boss", both[4], "specific activity tags follow general tags")
+catalog:shutdown()
+
 -- Failures and malformed responses are explicit and never retry in the background.
 for _, case in ipairs({
     { body = [[{"error":"Bucket unavailable"}]], fragment = "Bucket unavailable" },

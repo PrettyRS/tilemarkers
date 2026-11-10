@@ -13,10 +13,19 @@ PersistentDB = {
 local Codec = require('src/preset_codec')
 local Presets = require('src/presets')
 local Hub = require('src/preset_hub')
-ui = { AlignMode = { CENTRE = 1 }, Rectangle = {} }
+ui = {
+    AlignMode = { CENTRE = 1 }, Rectangle = {}, Canvas = {},
+    TextDataConfig = { new = function() return {} end },
+}
+id = { Font = { MUSEO_SANS_15PT_REGULAR = 1 } }
+config = { Font = { MUSEO_SANS_15PT_REGULAR = {
+    GetStringWidth = function(_, text) return #text * 7 end,
+} } }
 
 local function control(options)
-    local widget = { options = options, content = {}, texts = {}, buttons = {}, scrollY = 0 }
+    local widget = {
+        options = options, content = {}, texts = {}, buttons = {}, scrollY = 0, contentWidth = 552,
+    }
     widget.root = widget
     function widget:AddText(value)
         local text = { content = value.text, y = #self.texts * 24, height = value.height }
@@ -35,6 +44,7 @@ local function control(options)
         return { options = comboOptions, SetEntries = function() end }
     end
     function widget:SetScrollable() end
+    function widget:SetContentHeight(value) self.contentHeight = value end
     function widget:SetScrollPosition(value) self.scrollY = value end
     function widget:Show() end
     function widget:Destroy() self.root = nil end
@@ -48,7 +58,10 @@ local pretty = {
     Window = { new = function(_, options) return control(options) end },
     SimpleView = { new = function(_, options) return control(options) end },
     NewComponent = function()
-        return { SetPos = function() end, SetSize = function() end, MoveToBack = function() end }
+        return {
+            SetPos = function() end, SetSize = function() end, MoveToBack = function() end,
+            AddRectangle = function() end, AddText = function() end,
+        }
     end,
 }
 
