@@ -10,7 +10,7 @@ local Catalog = {
     refreshAvailable = true,
 }
 
-local QUERY = "bucket('tilemarkerpreset').select('page_name','title','author','token').limit(5000).run()"
+local QUERY = "bucket('tilemarkerpreset').select('page_name','title','author','token','tags').limit(5000).run()"
 local REQUEST_PATH = "/api.php?action=bucket&format=json&query="
     .. QUERY:gsub("([^A-Za-z0-9_.~%-])", function(character)
         return string.format("%%%02X", character:byte())
@@ -41,6 +41,23 @@ end)
 
 local function cleanMessage(value)
     return value:gsub("<[^>]*>", ""):sub(1, 240)
+end
+
+local function normalizeTags(value)
+    local tags, seen = {}, {}
+    if type(value) == "table" and value ~= Json.null then
+        for _, tag in ipairs(value) do
+            if type(tag) == "string" then
+                tag = tag:match("^%s*(.-)%s*$"):lower()
+                if tag ~= "" and not seen[tag] then
+                    seen[tag] = true
+                    tags[#tags + 1] = tag
+                end
+            end
+        end
+    end
+    table.sort(tags)
+    return tags
 end
 
 local function parseResponse(body)
@@ -89,6 +106,7 @@ local function parseResponse(body)
                 author = entry.author,
                 page = entry.page_name,
                 token = entry.token,
+                tags = normalizeTags(entry.tags),
             }
         else
             invalid = invalid + 1

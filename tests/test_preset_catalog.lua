@@ -58,7 +58,7 @@ local function load()
     return catalog
 end
 
-local sample = [[{"bucket":[{"page_name":"User:Tester/Tilemarkers","title":"Agility \uD83D\uDE80","author":"A\\B","token":"TM2:example"},{"title":42,"author":"Tester","page_name":"Bad","token":"TM2:bad"}]}]]
+local sample = [[{"bucket":[{"page_name":"User:Tester/Tilemarkers","title":"Agility \uD83D\uDE80","author":"A\\B","token":"TM2:example","tags":[" SKILLING ","agility","SKILLING","",false,null,42,"  "]},{"title":42,"author":"Tester","page_name":"Bad","token":"TM2:bad"}]}]]
 local catalog = load()
 tick(37)
 permitted = false
@@ -87,6 +87,10 @@ equal(false, catalog.loading, "request completed")
 equal(1, #catalog.rows, "malformed row is skipped")
 equal("Agility 🚀", catalog.rows[1].title, "surrogate pairs decode to UTF-8")
 equal("A\\B", catalog.rows[1].author, "escaped backslash is preserved")
+local tags = {}
+for _, tag in ipairs(catalog.rows[1].tags) do tags[tag] = true end
+equal(2, #catalog.rows[1].tags, "tag normalization removes blanks, invalid members and duplicates")
+assert(tags.skilling and tags.agility, "whitespace and case variants match the same filter tags")
 assert(catalog.error:find("Skipped 1"), "partial bad data remains visible")
 local initialNotifications = newUpdates
 catalog:detach()

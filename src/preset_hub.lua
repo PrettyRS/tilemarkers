@@ -21,9 +21,23 @@ end
 
 local function matches(row, search)
     if search == "" then return true end
-    return tostring(row.title or ""):lower():find(search, 1, true) ~= nil
+    if tostring(row.title or ""):lower():find(search, 1, true) ~= nil
         or tostring(row.author or ""):lower():find(search, 1, true) ~= nil
-        or tostring(row.page or ""):lower():find(search, 1, true) ~= nil
+        or tostring(row.page or ""):lower():find(search, 1, true) ~= nil then
+        return true
+    end
+    for _, tag in ipairs(row.tags or {}) do
+        if tag:find(search, 1, true) then return true end
+    end
+    return false
+end
+
+local function hasTag(row, selectedTag)
+    if selectedTag == nil then return true end
+    for _, tag in ipairs(row.tags or {}) do
+        if tag == selectedTag then return true end
+    end
+    return false
 end
 
 local function orderRows(left, right)
@@ -45,8 +59,8 @@ function Hub.new(prettyui, catalog, importFn, onImported)
         window = nil,
         page = 1,
         search = "",
-        author = nil,
-        authorIDs = {},
+        tag = nil,
+        tagIDs = {},
         importedEntries = {},
     }, Hub)
 end
@@ -61,8 +75,8 @@ function Hub:_release(window)
         if view ~= nil then view:Destroy() end
     end
     self.searchField = nil
-    self.authorCombo = nil
-    self.authorRows = nil
+    self.tagCombo = nil
+    self.tagRows = nil
     self.statusText = nil
     self.refreshButton = nil
     self.pageText = nil
@@ -80,25 +94,21 @@ function Hub:shutdown()
     self:close()
 end
 
-function Hub:_updateAuthors()
-    if self.authorRows == self.catalog.rows then return end
-    local authors, entries = {}, { { label = "All authors", id = 0 } }
+function Hub:_updateTags()
+    if self.tagRows == self.catalog.rows then return end
+    local tags, entries = {}, { { label = "All tags", id = 0 } }
     for _, row in ipairs(self.catalog.rows) do
-        local author = tostring(row.author or "")
-        if authors[author] == nil then authors[author] = true end
+        for _, tag in ipairs(row.tags or {}) do tags[tag] = true end
     end
     local sorted = {}
-    for author in pairs(authors) do sorted[#sorted + 1] = author end
-    table.sort(sorted, function(a, b)
-        local lowerA, lowerB = a:lower(), b:lower()
-        return lowerA == lowerB and a < b or lowerA < lowerB
-    end)
-    self.authorIDs = {}
+    for tag in pairs(tags) do sorted[#sorted + 1] = tag end
+    table.sort(sorted)
+    self.tagIDs = {}
     local selected = 0
-    local usedLabels = { ["All authors"] = true }
-    for index, author in ipairs(sorted) do
-        local display = plainText(author)
-        if display == "" then display = "(unknown author)" end
+    local usedLabels = { ["All tags"] = true }
+    for index, tag in ipairs(sorted) do
+        local display = plainText(tag):gsub("^%l", string.upper)
+        if display == "" then display = "(unnamed tag)" end
         local label = display
         local suffix = 2
         while usedLabels[label] do
@@ -107,17 +117,17 @@ function Hub:_updateAuthors()
         end
         usedLabels[label] = true
         entries[#entries + 1] = { label = label, id = index }
-        self.authorIDs[index] = author
-        if self.author == author then selected = index end
+        self.tagIDs[index] = tag
+        if self.tag == tag then selected = index end
     end
     if selected == 0 then
-        self.author = nil
+        self.tag = nil
         self.page = 1
     end
-    self.updatingAuthors = true
-    self.authorCombo:SetEntries(entries, selected)
-    self.authorRows = self.catalog.rows
-    self.updatingAuthors = false
+    self.updatingTags = true
+    self.tagCombo:SetEntries(entries, selected)
+    self.tagRows = self.catalog.rows
+    self.updatingTags = false
 end
 
 function Hub:_updateStatus()
@@ -178,7 +188,7 @@ function Hub:_render()
     local filtered = {}
     local search = self.search:lower()
     for _, row in ipairs(self.catalog.rows) do
-        if (self.author == nil or row.author == self.author) and matches(row, search) then
+        if hasTag(row, self.tag) and matches(row, search) then
             filtered[#filtered + 1] = row
         end
     end
@@ -255,10 +265,10 @@ function Hub:open(parent)
     if parent == nil then return false end
     self.page = 1
     self.search = ""
-    self.author = nil
+    self.tag = nil
     self.feedback = nil
     self.refreshFeedback = nil
-    self.authorRows = nil
+    self.tagRows = nil
     self.importedEntries = {}
     local window
     window = self.prettyui.Window.new(parent, {
@@ -289,13 +299,13 @@ function Hub:open(parent)
             self:_render()
         end,
     })
-    self.authorCombo = self.controls:AddComboBox({
-        entries = { { label = "All authors", id = 0 } },
+    self.tagCombo = self.controls:AddComboBox({
+        entries = { { label = "All tags", id = 0 } },
         selectedID = 0,
         width = -112, widthAnchor = 1,
-        onChange = function(_, authorID)
-            if self.window ~= window or self.updatingAuthors then return end
-            self.author = self.authorIDs[authorID]
+        onChange = function(_, tagID)
+            if self.window ~= window or self.updatingTags then return end
+            self.tag = self.tagIDs[tagID]
             self.page = 1
             self:_render()
         end,
@@ -306,8 +316,8 @@ function Hub:open(parent)
         self.refreshFeedback = nil
         local started, reason = self.catalog:refresh(function()
             if self.window ~= window then return end
-            local rowsChanged = self.authorRows ~= self.catalog.rows
-            self:_updateAuthors()
+            local rowsChanged = self.tagRows ~= self.catalog.rows
+            self:_updateTags()
             self:_updateStatus()
             if rowsChanged or not self.catalog.loaded then self:_render() end
         end)
@@ -343,13 +353,13 @@ function Hub:open(parent)
         self.page = self.page + 1
         self:_render()
     end, { inline = true, x = 80, xAnchor = 0.5, size = 24, offsetY = 2, tooltip = "Next page" })
-    self:_updateAuthors()
+    self:_updateTags()
     self:_updateStatus()
     self:_render()
     self.catalog:open(function()
         if self.window ~= window then return end
-        local rowsChanged = self.authorRows ~= self.catalog.rows
-        self:_updateAuthors()
+        local rowsChanged = self.tagRows ~= self.catalog.rows
+        self:_updateTags()
         self:_updateStatus()
         if rowsChanged or not self.catalog.loaded then self:_render() end
     end)

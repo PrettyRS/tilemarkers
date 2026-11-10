@@ -54,7 +54,8 @@ local pretty = {
 
 local token = assert(Codec.encode('Anachronia agility', { { level = 0, x = 3200, z = 3201 } }))
 local function row(author, page)
-    return { title = 'Anachronia agility', author = author, page = page or 'User:Wiki/Tilemarkers', token = token }
+    return { title = 'Anachronia agility', author = author, page = page or 'User:Wiki/Tilemarkers',
+        token = token, tags = { 'skilling', 'agility' } }
 end
 local catalog = { loaded = true, loading = false, refreshAvailable = true,
     rows = { row('Jome'), row('Voijehna (RS Reddit)') } }
@@ -67,6 +68,7 @@ function catalog:refresh(callback)
         local previous = self.rows[index]
         fresh[#fresh + 1] = {
             title = previous.title, author = previous.author, page = previous.page, token = previous.token,
+            tags = previous.tags,
         }
     end
     self.rows = fresh
@@ -98,17 +100,18 @@ hub.refreshButton.click()
 equal(true, buttonFor('Jome').disabled, 'refresh preserves the imported submission identity')
 equal(false, buttonFor('Voijehna (RS Reddit)').disabled,
     'refresh does not merge independent submissions')
-local secondAuthor
-for id, author in pairs(hub.authorIDs) do
-    if author == 'Voijehna (RS Reddit)' then secondAuthor = id end
+local agilityTag
+for id, tag in pairs(hub.tagIDs) do
+    if tag == 'agility' then agilityTag = id end
 end
-hub.authorCombo.options.onChange(nil, secondAuthor)
+hub.tagCombo.options.onChange(nil, agilityTag)
+equal(2, #hub.results.buttons, 'a tag includes matching submissions from different authors')
 buttonFor('Voijehna (RS Reddit)').click()
 equal(2, #Presets:list(), 'second submission can be independently saved')
 local saved = Presets:list()
 assert(saved[1].id ~= saved[2].id, 'independent imports have distinct saved preset IDs')
 assert(Presets:isActive(saved[1].id) and Presets:isActive(saved[2].id), 'both imported presets are enabled')
-hub.authorCombo.options.onChange(nil, 0)
+hub.tagCombo.options.onChange(nil, 0)
 equal(true, buttonFor('Jome').disabled, 'clearing the filter retains the first import')
 equal(true, buttonFor('Voijehna (RS Reddit)').disabled, 'clearing the filter retains the second import')
 
@@ -138,6 +141,79 @@ equal(false, hub.results.buttons[2].disabled, 'identical name, author and token 
 hub.results.buttons[2].click()
 equal(5, #Presets:list(), 'both source pages are independently importable')
 hub:shutdown()
+
+-- Tag membership composes with search and pagination; untagged presets stay
+-- visible in the unfiltered catalogue.
+catalog.rows = {}
+for index = 1, 31 do
+    catalog.rows[index] = {
+        title = string.format('Route %02d', index), author = index % 2 == 0 and 'Alice' or 'Bob',
+        page = 'User:Tag presets', token = token,
+        tags = index <= 26 and { 'skilling', index % 2 == 0 and 'agility' or 'crafting' } or {},
+    }
+end
+local tagHub = Hub.new(pretty, catalog, function(source) return Presets:import(source) end)
+tagHub:open({})
+local function selectTag(name)
+    if name == nil then
+        tagHub.tagCombo.options.onChange(nil, 0)
+        return
+    end
+    for id, tag in pairs(tagHub.tagIDs) do
+        if tag == name then
+            tagHub.tagCombo.options.onChange(nil, id)
+            return
+        end
+    end
+    error('Missing tag: ' .. name)
+end
+equal(25, #tagHub.results.buttons, 'the unfiltered first page remains bounded')
+tagHub.nextButton.click()
+equal(6, #tagHub.results.buttons, 'unfiltered catalogue includes five untagged entries on its last page')
+selectTag('agility')
+equal(1, tagHub.page, 'changing tags returns to the first page')
+equal(13, #tagHub.results.buttons, 'membership selects exactly the agility entries')
+for index = 1, 13 do
+    equal(string.format('Route %02d', index * 2), tagHub.results.texts[index * 2 - 1].content,
+        'tag results exclude crafting and untagged entries')
+end
+tagHub.searchField.options.onChange(nil, nil, 'route 02')
+equal(1, #tagHub.results.buttons, 'text search narrows the selected tag')
+tagHub.searchField.options.onChange(nil, nil, 'crafting')
+equal(0, #tagHub.results.buttons, 'search does not bypass tag membership')
+tagHub.searchField.options.onChange(nil, nil, 'SKILLING')
+equal(13, #tagHub.results.buttons, 'text search also matches tags without case sensitivity')
+tagHub.searchField.options.onChange(nil, nil, '')
+selectTag('skilling')
+equal(25, #tagHub.results.buttons, 'a larger tag is paginated')
+tagHub.nextButton.click()
+equal(1, #tagHub.results.buttons, 'tag pagination has the correct final remainder')
+tagHub.refreshButton.click()
+equal('skilling', tagHub.tag, 'refresh retains a selected tag which still exists')
+equal(2, tagHub.page, 'refresh retains a valid page within the selected tag')
+equal(1, #tagHub.results.buttons, 'refresh does not mix other tags into the final page')
+selectTag('agility')
+local importedTitle = tagHub.results.texts[1].content
+tagHub.results.buttons[1].click()
+equal(true, tagHub.results.buttons[1].disabled, 'tagged entry is marked imported')
+for _, entry in ipairs(catalog.rows) do
+    for _, tag in ipairs(entry.tags) do
+        if tag == 'agility' then entry.tags = { 'pvm' }; break end
+    end
+end
+tagHub.refreshButton.click()
+equal(nil, tagHub.tag, 'a removed tag falls back to the full catalogue')
+equal(1, tagHub.page, 'removing the selected tag resets pagination')
+equal(25, #tagHub.results.buttons, 'fallback restores the full first page')
+local retainedImport = false
+for index, button in ipairs(tagHub.results.buttons) do
+    if tagHub.results.texts[index * 2 - 1].content == importedTitle then
+        retainedImport = button.disabled
+    end
+end
+equal(true, retainedImport, 'editing wiki tags does not change submission import identity')
+selectTag(nil)
+tagHub:shutdown()
 
 -- Use the real catalogue to exercise UI readiness across request transitions.
 local logic
