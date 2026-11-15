@@ -205,9 +205,10 @@ local function gridKey(coord)
     return string.format("%d:%d:%d", coord.level, coord.x, coord.z)
 end
 
-function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers)
+function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers, presetHub)
     self.presetHandlers = presetHandlers
     self.styleHandlers = styleHandlers
+    self.presetHub = presetHub
     self.collapsedPresets = {}
     self.prettyui = assert(
         prettyUILibrary,
@@ -297,6 +298,7 @@ function UI:reset()
 end
 
 function UI:destroy()
+    if self.presetHub ~= nil then self.presetHub:close() end
     if self.presetEditOverlay ~= nil then
         self.presetEditOverlay:Destroy()
     end
@@ -350,8 +352,14 @@ end
 function UI:destroyContent()
     self:closeStyleManager()
     Event.Draw.Unsubscribe(CONTENT_EVENT_ID)
+    if self.presetHubPermissionTooltip ~= nil then
+        self.presetHubPermissionTooltip:Destroy()
+        self.presetHubPermissionTooltip = nil
+    end
+    self.presetHubPermissionHover = nil
     if self.contentView ~= nil then self.contentView:Destroy() end
     self.contentView = nil
+    self.presetHubButton = nil
     self.contentParent = nil
     self.presetPanels = {}
     self.presetPanelsByID = {}
@@ -449,6 +457,14 @@ end
 
 local function resizePresetPanels(self)
     local width = self.contentView.contentWidth - self.presetLayout.padding * 2
+    if self.presetHubButton ~= nil then
+        self.presetHubButton.root:SetWidth(width)
+        if self.presetHubPermissionHover ~= nil then
+            local button = self.presetHubButton.root
+            self.presetHubPermissionHover:SetPos(button.x, button.y)
+            self.presetHubPermissionHover:SetSize(width, button.height)
+        end
+    end
     for _, panel in pairs(self.presetPanelsByID) do
         panel:SetSize(width, panel.height)
     end
@@ -463,6 +479,7 @@ function UI:rebuildPresetPanels(focusPresetID)
     local presets = self.presetHandlers and self.presetHandlers.list() or {}
     if self.presetEmptyText ~= nil then
         if #presets == 0 then
+            resizePresetPanels(self)
             self.contentView:SetScrollPosition(scrollY)
             return
         end
@@ -479,6 +496,7 @@ function UI:rebuildPresetPanels(focusPresetID)
             height = 32,
             alignHorizontal = ui.AlignMode.CENTRE,
         })
+        resizePresetPanels(self)
         self.contentView:SetScrollPosition(scrollY)
         return
     end
@@ -824,6 +842,31 @@ function UI:mountContent(parent, focusPresetID)
         offsetY = (layout.headingHeight - layout.size) / 2,
         tooltip = "Import preset",
     })
+    local hubTooltip = "Browse community presets from the RuneScape Wiki"
+    local canOpenHub = self.presetHub ~= nil and Plugin.HasPermission(PluginPermissions.httpAccess)
+    if self.presetHub ~= nil and not canOpenHub then
+        hubTooltip = "Enable the optional httpAccess permission for Tile Markers to browse wiki presets."
+    end
+    self.presetHubButton = self.contentView:AddSimpleButton("Preset hub", function()
+        self:openPresetHub()
+    end, {
+        width = view.contentWidth - layout.padding * 2,
+        disabled = not canOpenHub,
+        tooltip = canOpenHub and hubTooltip or nil,
+    })
+    if self.presetHub ~= nil and not canOpenHub then
+        -- Disabled SimpleButtons stop mouseover events. A sibling hover target
+        -- keeps permission guidance available without enabling the button.
+        local button = self.presetHubButton.root
+        local hover = self.prettyui.NewComponent(ui.Layer, view.content)
+        hover:SetPos(button.x, button.y)
+        hover:SetSize(button.width, button.height)
+        hover.enabled = true
+        hover.clickthrough = false
+        hover:Subscribe(ui.Hook.ONCLICK, function() return false end)
+        self.presetHubPermissionHover = hover
+        self.presetHubPermissionTooltip = self.prettyui.Tooltip.attach(hover, view.content, hubTooltip)
+    end
     self:rebuildPresetPanels(focusPresetID)
     view.root:Subscribe(ui.Hook.ONRESIZE, function()
         if self.contentView ~= view then return end
@@ -864,6 +907,18 @@ function UI:ensureMounted()
     return true
 end
 
+function UI:openPresetHub()
+    if self.presetHub == nil or not Plugin.HasPermission(PluginPermissions.httpAccess)
+        or not self:ensureMounted()
+        or self:isPromptOpen() or self.presetEditOverlay ~= nil then
+        return false
+    end
+    local parent = ui.Interfaces:GetComponent(
+        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+    if parent == nil then return false end
+    return self.presetHub:open(parent)
+end
+
 
 
 function UI:isPromptOpen(ignoreCustomization)
@@ -876,6 +931,7 @@ function UI:isPromptOpen(ignoreCustomization)
         or self.presetDeleteWindow ~= nil
         or self.styleManagerWindow ~= nil
         or self.styleDeleteWindow ~= nil
+        or (self.presetHub ~= nil and self.presetHub.window ~= nil)
 end
 
 local function trim(value)

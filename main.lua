@@ -6,6 +6,8 @@ local SavedStyles = require("src/saved_styles")
 local PresetEditor = require("src/preset_editor")
 local RegionBindings = require("src/region_bindings")
 local UI = require("src/ui")
+local PresetCatalog = require("src/preset_catalog")
+local PresetHub = require("src/preset_hub")
 
 local EVENT_ID = "tileMarker"
 local DRAW_DISTANCE = 30
@@ -108,6 +110,10 @@ local function matchingDirectTiles(previousTiles, savedTiles)
     return result
 end
 
+local presetHub = PresetHub.new(prettyui, PresetCatalog,
+    function(token) return Presets:import(token) end,
+    function(preset) UI:rebuildPresetPanels(preset.id) end)
+
 UI:init(
     {
         list = function()
@@ -196,7 +202,8 @@ UI:init(
         end,
         delete = function(id) return SavedStyles:delete(id) end,
         maxStyles = SavedStyles.MAX_STYLES,
-    })
+    },
+    presetHub)
 
 Event.Logic.Subscribe(EVENT_ID, function()
     local player = Player.IsAvailable() and Player.GetEntity() or nil
@@ -306,6 +313,8 @@ function PluginShutdown()
     Minimenu.shutdown()
     PresetEditor:cancel()
     Event.GameStateChanged.Unsubscribe(EVENT_ID)
+    presetHub:shutdown()
+    PresetCatalog:shutdown()
     UI:shutdown()
     Draw.Reset()
 end
