@@ -10,7 +10,7 @@ local Catalog = {
     refreshAvailable = true,
 }
 
-local QUERY = "bucket('tilemarkerpreset').select('page_name','title','author','token','tags').limit(5000).run()"
+local QUERY = "bucket('tilemarkerpreset').select('page_name','location','author','token','tags').limit(5000).run()"
 local REQUEST_PATH = "/api.php?action=bucket&format=json&query="
     .. QUERY:gsub("([^A-Za-z0-9_.~%-])", function(character)
         return string.format("%%%02X", character:byte())
@@ -41,6 +41,17 @@ end)
 
 local function cleanMessage(value)
     return value:gsub("<[^>]*>", ""):sub(1, 240)
+end
+
+local function normalizeLocation(value)
+    if type(value) ~= "string" then return nil end
+    -- Bucket text contains wikitext, not the rendered labels shown on the wiki.
+    return (value:gsub("%[%[[^%[%]|]+|([^%[%]]+)%]%]", "%1")
+        :gsub("%[%[([^%[%]]+)%]%]", "%1")
+        :gsub("''+", "")
+        :gsub("<[^>]*>", "")
+        :gsub("%s+", " ")
+        :match("^%s*(.-)%s*$"))
 end
 
 local function orderTags(left, right)
@@ -103,13 +114,14 @@ local function parseResponse(body)
     local rows = {}
     local invalid = 0
     for _, entry in ipairs(bucket) do
+        local title = type(entry) == "table" and normalizeLocation(entry.location)
         if type(entry) == "table" and entry ~= Json.null
-            and type(entry.title) == "string" and entry.title ~= ""
+            and title ~= nil and title ~= ""
             and type(entry.author) == "string"
             and type(entry.page_name) == "string" and entry.page_name ~= ""
             and type(entry.token) == "string" and entry.token ~= "" then
             rows[#rows + 1] = {
-                title = entry.title,
+                title = title,
                 author = entry.author,
                 page = entry.page_name,
                 token = entry.token,

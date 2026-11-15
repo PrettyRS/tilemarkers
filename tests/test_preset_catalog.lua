@@ -58,7 +58,7 @@ local function load()
     return catalog
 end
 
-local sample = [[{"bucket":[{"page_name":"User:Tester/Tilemarkers","title":"Agility \uD83D\uDE80","author":"A\\B","token":"TM2:example","tags":[" SKILLING ","agility","SKILLING","",false,null,42,"  "]},{"title":42,"author":"Tester","page_name":"Bad","token":"TM2:bad"}]}]]
+local sample = [[{"bucket":[{"page_name":"Guide:Tilemarkers","location":"Agility \uD83D\uDE80","author":"A\\B","token":"TM2:example","tags":[" SKILLING ","agility","SKILLING","",false,null,42,"  "]},{"location":42,"author":"Tester","page_name":"Bad","token":"TM2:bad"}]}]]
 local catalog = load()
 tick(37)
 permitted = false
@@ -132,9 +132,9 @@ equal(nil, subscribed, "shutdown unsubscribes tick handler")
 catalog = load()
 catalog:open(function() end)
 answer(requests[1], [[{"bucket":[
-    {"title":"Skilling","author":"A","page_name":"User:One","token":"TM2:one","tags":["woodcutting","agility"," SKILLING "]},
-    {"title":"PvM","author":"A","page_name":"User:Two","token":"TM2:two","tags":["slayer"," PvM ","boss"]},
-    {"title":"Both","author":"A","page_name":"User:Three","token":"TM2:three","tags":["agility","skilling","boss","pvm","SKILLING"]}
+    {"location":"Skilling","author":"A","page_name":"User:One","token":"TM2:one","tags":["woodcutting","agility"," SKILLING "]},
+    {"location":"PvM","author":"A","page_name":"User:Two","token":"TM2:two","tags":["slayer"," PvM ","boss"]},
+    {"location":"Both","author":"A","page_name":"User:Three","token":"TM2:three","tags":["agility","skilling","boss","pvm","SKILLING"]}
 ]}]])
 equal("skilling", catalog.rows[1].tags[1], "skilling precedes alphabetically earlier skill tags")
 equal("pvm", catalog.rows[2].tags[1], "pvm precedes alphabetically earlier activity tags")
@@ -146,16 +146,38 @@ equal("agility", both[3], "specific tags retain their relative alphabetical orde
 equal("boss", both[4], "specific activity tags follow general tags")
 catalog:shutdown()
 
+catalog = load()
+catalog:open(function() end)
+answer(requests[1], [=[{"bucket":[
+    {"title":null,"location":"[[Engram/Guide|Engram Locations]] - Teleport and Direction Guide","author":"A","page_name":"Guide:Tilemarkers","token":"TM2:engram"},
+    {"location":"  '''Crafting guild''' - ''urns''\n","author":"B","page_name":"Guide:Tilemarkers","token":"TM2:urns"},
+    {"location":"[[Colossi Divination]] - <small>Guthix's Murals</small>","author":"C","page_name":"Guide:Tilemarkers","token":"TM2:murals"},
+    {"location":null,"author":"A","page_name":"Guide:Tilemarkers","token":"TM2:null"},
+    {"location":"  \n\t","author":"A","page_name":"Guide:Tilemarkers","token":"TM2:blank"},
+    {"location":"<small>''</small>","author":"A","page_name":"Guide:Tilemarkers","token":"TM2:markup"},
+    {"location":"Missing token","author":"A","page_name":"Guide:Tilemarkers"},
+    null,
+    false
+]}]=])
+equal(true, catalog.loaded, "locations load without the obsolete title field")
+equal(3, #catalog.rows, "invalid locations and incomplete presets remain excluded")
+equal("Engram Locations - Teleport and Direction Guide", catalog.rows[1].title, "piped links display their labels")
+equal("Crafting guild - urns", catalog.rows[2].title, "wiki emphasis and surrounding whitespace are removed")
+equal("Colossi Divination - Guthix's Murals", catalog.rows[3].title, "plain links and HTML normalize without losing apostrophes")
+equal("TM2:engram", catalog.rows[1].token, "display normalization leaves the import token unchanged")
+assert(catalog.error:find("Skipped 6"), "malformed entries still produce a warning")
+catalog:shutdown()
+
 -- Failures and malformed responses are explicit and never retry in the background.
 for _, case in ipairs({
     { body = [[{"error":"Bucket unavailable"}]], fragment = "Bucket unavailable" },
     { body = [[{"bucket":{"wrong":"shape"}}]], fragment = "malformed preset bucket" },
-    { body = [[{"bucket":[{"title":true}]}]], fragment = "malformed preset entries" },
+    { body = [[{"bucket":[{"location":true}]}]], fragment = "malformed preset entries" },
     { body = [[{"unexpected":[]}]], fragment = "no preset bucket" },
     { body = [[{"bucket":null}]], fragment = "no preset bucket" },
     { body = [[{"bucket":[1,]}]], fragment = "Could not decode" },
     { body = [[{"bucket":[],"other":"\uD83D"}]], fragment = "Could not decode" },
-    { body = [[{"bucket":[{"title":"a
+    { body = [[{"bucket":[{"location":"a
 b"}]}]], fragment = "Could not decode" },
 }) do
     catalog = load()
@@ -172,7 +194,7 @@ end
 catalog = load()
 tick(100)
 catalog:open(function() end)
-answer(requests[1], [[{"bucket":[{"title":"Old","author":"A","page_name":"User:Old","token":"TM2:old"}]}]])
+answer(requests[1], [[{"bucket":[{"location":"Old","author":"A","page_name":"User:Old","token":"TM2:old"}]}]])
 tick(15100)
 catalog:refresh()
 answer(requests[2], [[{"error":"Wiki down"}]])
@@ -230,7 +252,7 @@ catalog:open(function() closedUpdates = closedUpdates + 1 end)
 local loadingRequest = requests[1]
 catalog:detach()
 local beforeDetach = closedUpdates
-answer(loadingRequest, [[{"bucket":[{"title":"Cached","author":"A","page_name":"User:Cached","token":"TM2:cached"}]}]])
+answer(requests[1], [[{"bucket":[{"location":"Cached","author":"A","page_name":"User:Cached","token":"TM2:cached"}]}]])
 equal(beforeDetach, closedUpdates, "closed view is not notified by pending response")
 equal(false, loadingRequest.cancelled, "closing the view keeps a cacheable request alive")
 equal(true, catalog.loaded, "pending request fills cache after view closes")
@@ -258,7 +280,7 @@ tick(0)
 catalog:open(function() end)
 local rows = {}
 for index = 1, 5000 do
-    rows[index] = [[{"title":"T","author":"A","page_name":"User:Wiki","token":"TM2:t"}]]
+    rows[index] = [[{"location":"T","author":"A","page_name":"User:Wiki","token":"TM2:t"}]]
 end
 answer(requests[1], '{"bucket":[' .. table.concat(rows, ',') .. ']}')
 equal(5000, #catalog.rows, "catalog receives the maximum bounded response")
