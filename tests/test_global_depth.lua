@@ -43,7 +43,7 @@ PersistentDB = {
     end,
     SetBool = function(_, key, value)
         if key == "markerHoverPreview" then storedHoverPreview = value end
-        if key == "markerFill" or key == "markerOutlineCornersOnly" then
+        if key == "markerFill" or key == "markerOutlineCornersOnly" or key == "prettyPresetPanel" then
             storedRendering[key] = value
         end
         return true
@@ -672,7 +672,7 @@ makeControl = function()
         child.height = options.height
         return child
     end
-    control.AddSimpleButton = addControl
+    control.AddSimpleButton = control.AddFancyButton
     control.AddSlider = addControl
     control.AddSprite = function(self, sprite, options)
         local child = addControl(self, options)
@@ -1079,5 +1079,145 @@ UI:shutdown()
 runDrawFrame()
 expect(cancelledParent.children[1], nil, "shutdown cancels a pending mount")
 expect(UI.contentView, nil, "shutdown does not resurrect a view")
+
+-- NisPanel content is disposable; the preset model and native launcher are not.
+local livePanels = {}
+local panelEnabled = true
+mountedPrettyUI.NisPanel = {
+    new = function(parent, options)
+        assert(not livePanels[options.id], "duplicate live preset panel")
+        assert(options.tabIcon and options.tabIcon.loaded,
+            "tab and ribbon sprites require a loaded image resource")
+        local panel = { parent = parent, options = options, active = panelEnabled }
+        livePanels[options.id] = panel
+        function panel:OnCleanup(callback) self.cleanup = callback end
+        function panel:ReleaseContent()
+            if self.content == nil then return end
+            local cleanup = self.cleanup
+            self.cleanup = nil
+            if cleanup then cleanup() end
+            self.content = nil
+        end
+        function panel:BuildContent()
+            if self.content ~= nil then return end
+            self.content = { width = options.width, height = options.height }
+            options.buildContent(self)
+        end
+        function panel:Show()
+            self.active, panelEnabled = true, true
+            self:BuildContent()
+        end
+        function panel:Hide()
+            self.active, panelEnabled = false, false
+            self:ReleaseContent()
+        end
+        function panel:Destroy()
+            self:ReleaseContent()
+            self.destroyed = true
+            livePanels[options.id] = nil
+        end
+        if panel.active then panel:BuildContent() end
+        return panel
+    end,
+}
+local panelIcon = { loaded = false }
+function panelIcon:Load()
+    self.loaded = true
+    return "success"
+end
+-- The client resource listing exposes the filename stem, not "tilemarkers.png".
+Plugin = { resources = { tilemarkers = panelIcon } }
+local gameArea = { width = 1000, height = 800 }
+ui.Interfaces.GetComponent = function() return gameArea end
+ui.Canvas = { new = function()
+    local canvas = makeControl()
+    function canvas:SetPos() end
+    return canvas
+end }
+mountedPresetActive = true
+UI:init(UI.presetHandlers, mountedPrettyUI, draw)
+UI:ensureMounted()
+local nativeParent = { width = 640, height = 480 }
+presentContent(nativeParent)
+settingsCallbacks.tilemarkers_settings({ component = { width = 640, height = 480 } })
+local hostOptions = UI.settingsView.addedComponents[1].options
+local nativeView = UI.contentView
+hostOptions.onChange(nil, nil, "pretty_preset_panel", true)
+expect(storedRendering.prettyPresetPanel, true, "PrettyUI panel choice persists")
+expect(nativeView.destroyed, true, "switching hosts removes the native preset list")
+local nis = UI.presetNisPanel
+expect(nis.parent, gameArea, "NisPanel mounts directly on the game area for docking")
+expect(UI.contentParent, nis.content, "preset management mounts inside NisPanel content")
+assert(UI.presetPanelsByID.preset_1, "saved presets are available in the new host")
+local nisView = UI.contentView
+presetControl("EYE").action()
+expect(mountedPresetActive, false, "preset activation works in the PrettyUI host")
+UI.contentView.scrollY = 72
+nis:ReleaseContent()
+expect(nisView.destroyed, true, "tab deselection releases preset controls")
+expect(UI.contentView, nil, "tab deselection drops retained control handles")
+UI:rebuildPresetPanels()
+nis:BuildContent()
+expect(UI.contentView.scrollY, 72, "tab reselection restores preset scroll position")
+assert(presetControl("HIDE"), "tab reselection reflects current preset activation")
+local expandedBefore = UI.collapsedPresets.preset_1
+local narrowParent = nis.content
+narrowParent.width = 240
+local wideView = UI.contentView
+wideView.subscriptions[ui.Hook.ONRESIZE]()
+expect(wideView.destroyed, true, "resizing across the compact breakpoint rebuilds controls")
+expect(UI.presetNisPanel, nis, "compact layout rebuild does not destroy the panel shell")
+expect(UI.collapsedPresets.preset_1, expandedBefore, "resize keeps preset expansion state")
+local compactView = UI.contentView
+nis:Hide()
+expect(compactView.destroyed, true, "cleanup follows the replacement view after resizing")
+UI:ensureMounted()
+expect(UI.contentView, nil, "closed panel stays closed across world-render frames")
+presentContent(nativeParent)
+local launcher = UI.nativePresetLauncher
+expect(UI.contentView, nil, "opening the native launcher does not duplicate the preset list")
+launcher.addedComponents[2].action()
+expect(UI.contentParent, nis.content, "native launcher reopens a closed PrettyUI panel")
+local reopenedView = UI.contentView
+presentContent(nativeParent)
+expect(UI.contentView, reopenedView, "native presentation does not release PrettyUI content")
+hostOptions.onChange(nil, nil, "pretty_preset_panel", false)
+expect(storedRendering.prettyPresetPanel, false, "built-in panel choice persists")
+expect(nis.destroyed, true, "switching back unregisters the PrettyUI panel and ribbon")
+expect(UI.nativePresetLauncher, nil, "switching back removes the launcher")
+expect(UI.contentParent, nativeParent, "switching back restores built-in preset management")
+assert(UI.presetPanelsByID.preset_1, "switching hosts preserves saved presets")
+
+-- Changing mode before the deferred native presentation must use the new mode.
+contentCallbacks.tilemarkers_content({ component = nativeParent })
+hostOptions.onChange(nil, nil, "pretty_preset_panel", true)
+nativeParent.children = {}
+local pendingNisView = UI.contentView
+runDrawFrame()
+expect(UI.contentView, pendingNisView, "pending native presentation leaves NisPanel content intact")
+assert(UI.nativePresetLauncher, "pending presentation creates the selected host's launcher")
+local panelBeforeLogout = UI.presetNisPanel
+UI:destroyContent()
+UI:destroy()
+expect(panelBeforeLogout.destroyed, true, "logout releases the panel shell")
+expect(next(livePanels), nil, "logout releases the stable panel ID")
+UI:ensureMounted()
+assert(UI.presetNisPanel ~= panelBeforeLogout, "game-area remount reconstructs the preset panel")
+UI.presetNisPanel:Hide()
+UI:shutdown()
+UI:init(UI.presetHandlers, mountedPrettyUI, draw)
+UI:ensureMounted()
+expect(UI.usePrettyPresetPanel, true, "PrettyUI host selection survives plugin reload")
+expect(UI.contentView, nil, "saved closed-panel state survives plugin reload")
+presentContent(nativeParent)
+UI.nativePresetLauncher.addedComponents[2].action()
+assert(UI.presetPanelsByID.preset_1, "reloaded closed panel can be reopened")
+local finalPanel = UI.presetNisPanel
+local finalLauncher = UI.nativePresetLauncher
+UI:shutdown()
+expect(finalPanel.destroyed, true, "shutdown releases the PrettyUI panel")
+expect(finalLauncher.destroyed, true, "shutdown releases the native launcher")
+expect(next(livePanels), nil, "shutdown removes every panel registration")
+expect(next(drawCallbacks), nil, "shutdown leaves no deferred host mount")
 
 print("test_global_config: ok")

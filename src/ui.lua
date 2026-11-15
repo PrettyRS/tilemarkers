@@ -27,6 +27,7 @@ local HOVER_PREVIEW_STORAGE_KEY = "markerHoverPreview"
 local FILL_STORAGE_KEY = "markerFill"
 local OUTLINE_CORNERS_STORAGE_KEY = "markerOutlineCornersOnly"
 local MARKING_KEYBIND_STORAGE_KEY = "markerKeybind"
+local PRETTY_PRESET_PANEL_STORAGE_KEY = "prettyPresetPanel"
 local DEFAULT_MARKING_KEYBIND = { GameKey.CONTROL, GameKey.SHIFT }
 local EMPTY_HOVER_STYLE = {
     outlineColour = 0xFFFFFF90,
@@ -205,6 +206,66 @@ local function gridKey(coord)
     return string.format("%d:%d:%d", coord.level, coord.x, coord.z)
 end
 
+local function destroyNisPanel(self)
+    local panel = self.presetNisPanel
+    self.presetNisPanel = nil
+    if panel ~= nil then panel:Destroy() end
+end
+
+local function destroyNativeLauncher(self)
+    if self.nativePresetLauncher ~= nil then self.nativePresetLauncher:Destroy() end
+    self.nativePresetLauncher = nil
+end
+
+local function mountNativeContent(self, parent)
+    destroyNativeLauncher(self)
+    self.nativeContentParent = parent
+    if not self.usePrettyPresetPanel then
+        self:mountContent(parent)
+        return
+    end
+    local view = self.prettyui.SimpleView.new(parent, {
+        width = 0, height = 0, widthAnchor = 1, heightAnchor = 1,
+        layout = { startY = 10, paddingLeft = 12, paddingRight = 12, rowGap = CONTROL_GAP },
+    })
+    self.nativePresetLauncher = view
+    view:AddText("Preset management is using the PrettyUI panel. Change this in Tile Markers settings.")
+    view:AddSimpleButton("Open preset panel", function()
+        if self.usePrettyPresetPanel and self:ensureMounted() then
+            self.presetNisPanel:Show()
+        end
+    end)
+end
+
+local function ensureNisPanel(self)
+    if not self.usePrettyPresetPanel or self.presetNisPanel ~= nil then return end
+    local icon = Plugin.resources.tilemarkers
+    if not icon.loaded then
+        local result = icon:Load()
+        assert(icon.loaded, "Could not load Tile Markers panel icon: " .. tostring(result))
+    end
+    self.presetNisPanel = self.prettyui.NisPanel.new(self.gameArea, {
+        id = "tilemarkers:presets",
+        x = 80, y = 80, width = 340, height = 480,
+        minWidth = 220, minHeight = 160,
+        tabIcon = icon,
+        tabText = "Tile Markers",
+        -- The shared preset view owns scrolling in both hosts.
+        scrollable = false,
+        buildContent = function(panel)
+            local parent = panel.content
+            panel:OnCleanup(function()
+                if self.contentParent == parent then
+                    self.presetPanelScrollY = self.contentView and self.contentView.scrollY or 0
+                    self:clearPresetContent()
+                end
+            end)
+            self:mountContent(parent)
+            self.contentView:SetScrollPosition(self.presetPanelScrollY or 0)
+        end,
+    })
+end
+
 function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers, presetHub)
     self.presetHandlers = presetHandlers
     self.styleHandlers = styleHandlers
@@ -221,6 +282,7 @@ function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers, pr
     self.recentColours = parseRecentColours(
         PersistentDB:GetString(RECENT_COLOURS_STORAGE_KEY))
     self.ignoreDepth = PersistentDB:GetBool(IGNORE_DEPTH_STORAGE_KEY) == true
+    self.usePrettyPresetPanel = PersistentDB:GetBool(PRETTY_PRESET_PANEL_STORAGE_KEY) == true
     self.hoverPreviewEnabled =
         PersistentDB:GetBool(HOVER_PREVIEW_STORAGE_KEY) ~= false
     self.markingKeybind =
@@ -242,10 +304,14 @@ function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers, pr
     end)
     Event.ContentLayerReady.Subscribe(CONTENT_EVENT_ID, function(event)
         local parent = event.component
-        self:destroyContent()
+        -- Native presentation clears its children after this event. Do not
+        -- disturb a separately mounted NisPanel while replacing the launcher.
+        if not self.usePrettyPresetPanel then self:clearPresetContent() end
+        destroyNativeLauncher(self)
+        self.nativeContentParent = nil
         Event.Draw.Subscribe(CONTENT_EVENT_ID, function()
             Event.Draw.Unsubscribe(CONTENT_EVENT_ID)
-            self:mountContent(parent)
+            mountNativeContent(self, parent)
         end)
     end)
 end
@@ -298,6 +364,7 @@ function UI:reset()
 end
 
 function UI:destroy()
+    destroyNisPanel(self)
     if self.presetHub ~= nil then self.presetHub:close() end
     if self.presetEditOverlay ~= nil then
         self.presetEditOverlay:Destroy()
@@ -350,8 +417,15 @@ function UI:destroySettings()
 end
 
 function UI:destroyContent()
-    self:closeStyleManager()
     Event.Draw.Unsubscribe(CONTENT_EVENT_ID)
+    destroyNisPanel(self)
+    self:clearPresetContent()
+    destroyNativeLauncher(self)
+    self.nativeContentParent = nil
+end
+
+function UI:clearPresetContent()
+    self:closeStyleManager()
     if self.presetHubPermissionTooltip ~= nil then
         self.presetHubPermissionTooltip:Destroy()
         self.presetHubPermissionTooltip = nil
@@ -688,6 +762,12 @@ function UI:mountSettings(parent)
             selected = self.globalStyle.outlineCornersOnly,
             tooltip = "Draw only the outline corners unless overridden in tile customization.",
         },
+        {
+            text = "Use PrettyUI preset panel",
+            value = "pretty_preset_panel",
+            selected = self.usePrettyPresetPanel,
+            tooltip = "Use a draggable, dockable PrettyUI panel instead of the built-in plugin panel.",
+        },
     }, {
         onChange = function(_, _, changedValue, selected)
             if changedValue == "ignore_depth" then
@@ -703,6 +783,17 @@ function UI:mountSettings(parent)
                 local key = changedValue == "fill"
                     and FILL_STORAGE_KEY or OUTLINE_CORNERS_STORAGE_KEY
                 PersistentDB:SetBool(key, selected == true)
+            elseif changedValue == "pretty_preset_panel" then
+                self.usePrettyPresetPanel = selected == true
+                PersistentDB:SetBool(PRETTY_PRESET_PANEL_STORAGE_KEY, self.usePrettyPresetPanel)
+                destroyNisPanel(self)
+                self:clearPresetContent()
+                if self.nativeContentParent ~= nil then
+                    mountNativeContent(self, self.nativeContentParent)
+                end
+                if self.usePrettyPresetPanel and self:ensureMounted() then
+                    self.presetNisPanel:Show()
+                end
             end
         end,
     })
@@ -783,7 +874,7 @@ function UI:mountSettings(parent)
 end
 
 function UI:mountContent(parent, focusPresetID)
-    self:destroyContent()
+    self:clearPresetContent()
     self.contentParent = parent
     local layout = presetLayout(parent.width)
     self.presetLayout = layout
@@ -892,6 +983,7 @@ function UI:ensureMounted()
         self:destroy()
         self.gameArea = currentGameArea
     end
+    ensureNisPanel(self)
 
     if self.canvas ~= nil then
         return true
