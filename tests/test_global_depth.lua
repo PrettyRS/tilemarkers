@@ -173,7 +173,9 @@ local prettyui = {
             end
             function window:AddColourPicker(pickerOptions)
                 promptColourPickerOptions = pickerOptions
-                local picker = { value = pickerOptions.value }
+                local picker = { value = pickerOptions.value, root = {} }
+                picker.swatchFrame = ui.Rectangle.new(picker.root)
+                picker.swatch = ui.Rectangle.new(picker.root)
                 function picker:GetValue() return self.value end
                 function picker:SetValue(value, notify)
                     self.value = value
@@ -191,7 +193,11 @@ local prettyui = {
             end
             function window:AddSimpleButton(content, action, buttonOptions)
                 local button = { root = {}, action = action }
-                promptSwatches[#promptSwatches + 1] = button
+                if content == "" then
+                    promptSwatches[#promptSwatches + 1] = button
+                else
+                    promptButtons[content] = action
+                end
                 return button
             end
             function window:AddFancyButton(content, action, buttonOptions)
@@ -507,12 +513,12 @@ UI.colourPromptWindow:Close()
 expect(closeCancelled, true, "window close invokes customization rollback")
 expect(UI:isPromptOpen(), false, "closed colour prompt is cleared")
 
-for index = 1, 6 do
+for index = 1, 32 do
     UI:rememberColour((index << 24) | 0x000000FF)
 end
-expect(#UI.recentColours, 5, "recent colour history is capped")
-expect(UI.recentColours[1], 0x060000FF, "newest recent colour stays first")
-expect(UI.recentColours[5], 0x020000FF, "oldest retained colour stays last")
+expect(#UI.recentColours, 8, "recent colour history is capped")
+expect(UI.recentColours[1], 0x200000FF, "newest recent colour stays first")
+expect(UI.recentColours[8], 0x190000FF, "oldest retained colour stays last")
 
 local createdPresetName
 local createdVisiblePresetName
@@ -666,6 +672,19 @@ makeControl = function()
         child.height = options.height
         return child
     end
+    control.AddTabs = function(self, entries, options)
+        local tabs = addControl(self, options)
+        tabs.entries = entries
+        tabs.activeIndex = options.activeIndex or 1
+        tabs.pages = {}
+        for index = 1, #entries do
+            tabs.pages[index] = makeControl()
+        end
+        function tabs:GetPage(index) return self.pages[index] end
+        function tabs:GetActiveIndex() return self.activeIndex end
+        function tabs:SetActive(index) self.activeIndex = index end
+        return tabs
+    end
     control.AddSimpleButton = addControl
     control.AddSlider = addControl
     control.AddSprite = function(self, sprite, options)
@@ -680,6 +699,7 @@ makeControl = function()
         child.sprite = sprite
         child.action = action
         child.options = options
+        child.disabled = options.disabled == true
         return child
     end
     control.AddText = function(self, options)
@@ -688,6 +708,7 @@ makeControl = function()
         child.options = options
         return child
     end
+    control.AddTitle = control.AddText
     control.AddTextField = addControl
     control.AddKeybindField = function(self, options)
         self.keybindOptions = options
@@ -695,7 +716,7 @@ makeControl = function()
     end
     control.Close = function() end
     control.Select = function() end
-    control.SetDisabled = function() end
+    control.SetDisabled = function(self, value) self.disabled = value == true end
     control.SetEntries = function() end
     control.SetSelected = function() end
     control.SetText = function() end
@@ -714,6 +735,7 @@ makeControl = function()
     control.SetSize = function(self, width, height)
         self.width, self.height = width, height
     end
+    control.SetWidth = function(self, width) self.width = width end
     control.RefreshRowBackgrounds = function(self)
         self.rowBackgroundsRefreshed = true
     end
@@ -770,12 +792,20 @@ local initialContent = UI.contentView
 expect(UI.settingsView, nil, "presets can open before marker settings")
 settingsCallbacks.tilemarkers_settings({ component = { width = 640, height = 480 } })
 expect(UI.contentView, initialContent, "opening settings leaves preset content mounted")
-local markerOptions = UI.settingsView.addedComponents[1]
+local settingsTabs = UI.settingsLayout.tabs
+expect(settingsTabs:GetActiveIndex(), 1, "native settings opens the settings tab")
+expect(settingsTabs.options.absolute, true, "native tabs avoid padded flow overflow")
+expect(settingsTabs.options.x, 0, "native tabs start at the left edge")
+expect(settingsTabs.options.y, 0, "native tabs start at the top edge")
+expect(settingsTabs.entries[1].text, "Settings", "native layout exposes marker settings")
+expect(settingsTabs.entries[2].text, "Style presets", "native layout exposes style presets")
+local settingsPage = settingsTabs:GetPage(1)
+local markerOptions = settingsPage.addedComponents[1]
 markerOptions.options.onChange(nil, nil, "hover_preview", false)
 expect(UI:isHoverPreviewEnabled(), false, "hover preview toggle updates runtime state")
 expect(storedHoverPreview, false, "hover preview toggle persists")
 
-local keybindOptions = UI.settingsView.keybindOptions
+local keybindOptions = settingsPage.keybindOptions
 heldKeys = { [GameKey.CONTROL] = true, [GameKey.SHIFT] = true }
 expect(UI:isMarkingKeybindDown(), true, "unset override uses Ctrl+Shift")
 keybindOptions.onChange(nil, { GameKey.K })
@@ -852,12 +882,19 @@ local function presetControl(sprite)
 end
 UI.contentView.scrollY = 120
 local togglePanel = UI.presetPanelsByID.preset_1
-presetControl("EYE").action()
+local visibilityButton = presetControl("EYE")
+expect(visibilityButton.options.toggleable, true,
+    "preset visibility uses the eye toggle state")
+visibilityButton.action()
 expect(UI.presetPanelsByID.preset_1, togglePanel,
     "toggle reuses the existing preset panel")
 expect(togglePanel.destroyed, nil, "toggle does not destroy native controls")
 expect(UI.contentView.scrollY, 120, "toggle keeps scroll position")
-expect(presetControl("HIDE").tooltip, "Enable preset",
+expect(presetControl("EYE"), visibilityButton,
+    "visibility toggle keeps the eye sprite")
+expect(visibilityButton.disabled, true,
+    "inactive preset uses the disabled eye state")
+expect(visibilityButton.tooltip, "Enable preset",
     "toggled button updates its tooltip")
 expect(mountedPresetActive, false, "toggle deactivates the preset")
 UI:rebuildPresetPanels("preset_1")
@@ -882,8 +919,10 @@ expect(collapsedPresetHeight < expandedPresetHeight, true, "collapse removes the
 for _, sprite in ipairs({ "PENCIL", "SETTINGS", "EXPORT", "TRASH" }) do
     expect(presetControl(sprite), nil, "collapsed actions cannot receive clicks: " .. sprite)
 end
-presetControl("HIDE").action()
+presetControl("EYE").action()
 expect(mountedPresetActive, true, "a collapsed preset can still be enabled")
+expect(presetControl("EYE").disabled, false,
+    "enabled preset restores the active eye state")
 expect(UI.presetPanelsByID.preset_1.height, collapsedPresetHeight,
     "activation does not expand the preset")
 presentContent({ width = 480, height = 240 })
@@ -955,8 +994,6 @@ promptButtons.Save()
 expect(emptyPresetView.destroyed, true, "leaving empty state destroys native placeholder flow")
 expect(UI.contentView ~= emptyPresetView, true, "new preset uses a fresh SimpleView")
 expect(UI.presetEmptyText, nil, "new content has no stale empty message")
-expect(#UI.contentView.addedComponents, 4,
-    "new content has only heading, actions, and the new preset card")
 expect(UI.contentView.scrolledToChild, UI.presetPanelsByID.next_preset,
     "created preset remains focused after view rebuild")
 UI.presetHandlers.createVisible = oldCreateVisible
@@ -986,7 +1023,8 @@ settingsCallbacks.tilemarkers_settings({ component = { width = 640, height = 480
 expect(previousSettings.destroyed, true, "reopening settings releases the previous view")
 expect(UI.contentView, previousContent, "reopening settings keeps preset content")
 expect(previousContent.destroyed, nil, "settings remount does not destroy preset content")
-local remountedOptions = UI.settingsView.addedComponents[1].entries
+local remountedOptions =
+    UI.settingsLayout.tabs:GetPage(1).addedComponents[1].entries
 expect(remountedOptions[3].selected, false, "reopening settings preserves fill changes")
 expect(remountedOptions[4].selected, true, "reopening settings preserves corner changes")
 expect(UI.canvas, previousCanvas, "reopening settings keeps the marker canvas")

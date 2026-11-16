@@ -2,9 +2,12 @@ local Tiles = require("src/tiles")
 local Draw = require("src/draw")
 local Minimenu = require("src/minimenu")
 local Presets = require("src/presets")
+local SavedStyles = require("src/saved_styles")
 local PresetEditor = require("src/preset_editor")
 local RegionBindings = require("src/region_bindings")
 local UI = require("src/ui")
+local PresetCatalog = require("src/preset_catalog")
+local PresetHub = require("src/preset_hub")
 
 local EVENT_ID = "tileMarker"
 local DRAW_DISTANCE = 30
@@ -107,6 +110,10 @@ local function matchingDirectTiles(previousTiles, savedTiles)
     return result
 end
 
+local presetHub = PresetHub.new(prettyui, PresetCatalog,
+    function(token) return Presets:import(token) end,
+    function(preset) UI:rebuildPresetPanels(preset.id) end)
+
 UI:init(
     {
         list = function()
@@ -182,7 +189,21 @@ UI:init(
             return true
         end,
     },
-    prettyui)
+    prettyui,
+    nil,
+    {
+        list = function() return SavedStyles:list() end,
+        get = function(id) return SavedStyles:get(id) end,
+        create = function(name, colour, fill, corners, label)
+            return SavedStyles:create(name, colour, fill, corners, label)
+        end,
+        update = function(id, name, colour, fill, corners, label)
+            return SavedStyles:update(id, name, colour, fill, corners, label)
+        end,
+        delete = function(id) return SavedStyles:delete(id) end,
+        maxStyles = SavedStyles.MAX_STYLES,
+    },
+    presetHub)
 
 Event.Logic.Subscribe(EVENT_ID, function()
     local player = Player.IsAvailable() and Player.GetEntity() or nil
@@ -252,6 +273,8 @@ Event.RegionCreated.Subscribe(EVENT_ID, resetMarkers)
 Event.RegionUpdated.Subscribe(EVENT_ID, resetMarkers)
 
 Minimenu.start({
+    listStyles = function() return SavedStyles:list() end,
+    getStyle = function(id) return SavedStyles:get(id) end,
     clearVisible = promptClearVisibleMarkers,
     createVisiblePreset = function()
         UI:promptForPresetCreation(true)
@@ -290,6 +313,8 @@ function PluginShutdown()
     Minimenu.shutdown()
     PresetEditor:cancel()
     Event.GameStateChanged.Unsubscribe(EVENT_ID)
+    presetHub:shutdown()
+    PresetCatalog:shutdown()
     UI:shutdown()
     Draw.Reset()
 end

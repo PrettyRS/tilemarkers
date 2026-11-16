@@ -16,7 +16,10 @@ local PRESET_TOKEN_MAX_LENGTH = 9999
 
 local OUTLINE_COLOUR_STORAGE_KEY = "markerOutlineColour"
 local RECENT_COLOURS_STORAGE_KEY = "recentMarkerColours"
-local MAX_RECENT_COLOURS = 5
+local MAX_RECENT_COLOURS = 8
+local COLOUR_SWATCH_OUTER_SIZE = 36
+local COLOUR_SWATCH_INNER_PADDING = 4
+local COLOUR_SWATCH_INNER_SIZE = COLOUR_SWATCH_OUTER_SIZE - (COLOUR_SWATCH_INNER_PADDING * 2)
 local OUTLINE_THICKNESS_STORAGE_KEY = "markerOutlineThicknessTenths"
 local FONT_SIZE_STORAGE_KEY = "markerFontSize"
 local IGNORE_DEPTH_STORAGE_KEY = "markerIgnoreDepth"
@@ -86,6 +89,10 @@ end
 
 
 local CONTROL_GAP = 8
+local SETTINGS_FIELD_WIDTH = 320
+local SETTINGS_WINDOW_WIDTH = 520
+local SETTINGS_WINDOW_HEIGHT = 520
+local releaseStyleContext
 local COMPACT_PRESET_WIDTH = 280
 local PRESET_LAYOUT = {
     padding = 14,
@@ -202,8 +209,10 @@ local function gridKey(coord)
     return string.format("%d:%d:%d", coord.level, coord.x, coord.z)
 end
 
-function UI:init(presetHandlers, prettyUILibrary, drawLibrary)
+function UI:init(presetHandlers, prettyUILibrary, drawLibrary, styleHandlers, presetHub)
     self.presetHandlers = presetHandlers
+    self.styleHandlers = styleHandlers
+    self.presetHub = presetHub
     self.collapsedPresets = {}
     self.prettyui = assert(
         prettyUILibrary,
@@ -279,14 +288,28 @@ function UI:reset()
     self.presetDeleteID = nil
     self.presetExportWindow = nil
     self.presetExportInput = nil
+    self.styleManagerWindow = nil
+    self.styleManagerLayout = nil
+    self.styleManagerView = nil
+    self.styleManagerCount = nil
+    self.styleManagerAdd = nil
+    self.styleManagerListScrollY = nil
+    self.styleWindowParent = nil
+    self.styleFormState = nil
+    self.styleDeleteWindow = nil
+    self.styleDeleteID = nil
+    self.styleDeleteError = nil
+    self.styleDeleteContext = nil
     self.gameArea = nil
 end
 
 function UI:destroy()
+    if self.presetHub ~= nil then self.presetHub:close() end
     if self.presetEditOverlay ~= nil then
         self.presetEditOverlay:Destroy()
     end
     self.presetEditOverlay = nil
+    self:closeStyleManager()
     self.presetEditStatus = nil
     if self.clearPromptWindow ~= nil and self.clearPromptWindow.root ~= nil then
         self.clearPromptWindow:Destroy()
@@ -323,18 +346,30 @@ function UI:shutdown()
 end
 
 function UI:destroySettings()
+    if self.settingsLayout ~= nil and releaseStyleContext ~= nil then
+        releaseStyleContext(self, self.settingsLayout.style)
+    end
     if self.settingsView ~= nil then self.settingsView:Destroy() end
     self.settingsView = nil
-    self.colourPicker = nil
-    self.thicknessText = nil
-    self.thicknessSlider = nil
-    self.labelSizeCombo = nil
+    self.settingsLayout = nil
+    local controls = self.styleManagerLayout and self.styleManagerLayout.settings or nil
+    self.colourPicker = controls and controls.colourPicker or nil
+    self.thicknessText = controls and controls.thicknessText or nil
+    self.thicknessSlider = controls and controls.thicknessSlider or nil
+    self.labelSizeCombo = controls and controls.labelSizeCombo or nil
 end
 
 function UI:destroyContent()
+    self:closeStyleManager()
     Event.Draw.Unsubscribe(CONTENT_EVENT_ID)
+    if self.presetHubPermissionTooltip ~= nil then
+        self.presetHubPermissionTooltip:Destroy()
+        self.presetHubPermissionTooltip = nil
+    end
+    self.presetHubPermissionHover = nil
     if self.contentView ~= nil then self.contentView:Destroy() end
     self.contentView = nil
+    self.presetHubButton = nil
     self.contentParent = nil
     self.presetPanels = {}
     self.presetPanelsByID = {}
@@ -432,6 +467,14 @@ end
 
 local function resizePresetPanels(self)
     local width = self.contentView.contentWidth - self.presetLayout.padding * 2
+    if self.presetHubButton ~= nil then
+        self.presetHubButton.root:SetWidth(width)
+        if self.presetHubPermissionHover ~= nil then
+            local button = self.presetHubButton.root
+            self.presetHubPermissionHover:SetPos(button.x, button.y)
+            self.presetHubPermissionHover:SetSize(width, button.height)
+        end
+    end
     for _, panel in pairs(self.presetPanelsByID) do
         panel:SetSize(width, panel.height)
     end
@@ -446,6 +489,7 @@ function UI:rebuildPresetPanels(focusPresetID)
     local presets = self.presetHandlers and self.presetHandlers.list() or {}
     if self.presetEmptyText ~= nil then
         if #presets == 0 then
+            resizePresetPanels(self)
             self.contentView:SetScrollPosition(scrollY)
             return
         end
@@ -462,6 +506,7 @@ function UI:rebuildPresetPanels(focusPresetID)
             height = 32,
             alignHorizontal = ui.AlignMode.CENTRE,
         })
+        resizePresetPanels(self)
         self.contentView:SetScrollPosition(scrollY)
         return
     end
@@ -491,16 +536,16 @@ function UI:rebuildPresetPanels(focusPresetID)
         self.presetPanels[#self.presetPanels + 1] = panel
         self.presetPanelsByID[presetID] = panel
         local eyeButton
-        eyeButton = panel:AddSpriteButton(active and "EYE" or "HIDE", function()
+        eyeButton = panel:AddSpriteButton("EYE", function()
             local nextActive = not active
             local success = self.presetHandlers.setActive(presetID, nextActive)
-            if success then
-                active = nextActive
-                eyeButton:SetSprite(active and "EYE" or "HIDE")
-                eyeButton:SetTooltip(active and "Disable preset" or "Enable preset")
-            end
+            if success then active = nextActive end
+            eyeButton:SetDisabled(not active)
+            eyeButton:SetTooltip(active and "Disable preset" or "Enable preset")
         end, {
             size = layout.size,
+            toggleable = true,
+            disabled = not active,
             tooltip = active and "Disable preset" or "Enable preset",
         })
         panel:AddText({
@@ -590,10 +635,15 @@ function UI:rebuildPresetPanels(focusPresetID)
 end
 
 function UI:updateStyleControls()
-    if self.thicknessText ~= nil then
-        self.thicknessText.content = string.format(
-            "Outline thickness: %.1f", self.outlineThickness)
+    local function update(layout)
+        local text = layout and layout.settings and layout.settings.thicknessText or nil
+        if text ~= nil then
+            text.content = string.format(
+                "Outline thickness: %.1f", self.outlineThickness)
+        end
     end
+    update(self.settingsLayout)
+    update(self.styleManagerLayout)
 end
 function UI:isHoverPreviewEnabled()
     return self.hoverPreviewEnabled ~= false
@@ -613,22 +663,9 @@ end
 
 
 
-function UI:mountSettings(parent)
-    self:destroySettings()
-    self.settingsView = self.prettyui.SimpleView.new(parent, {
-        width = 0,
-        height = 0,
-        widthAnchor = 1,
-        heightAnchor = 1,
-        layout = {
-            startY = 10,
-            paddingLeft = 12,
-            paddingRight = 12,
-            rowGap = CONTROL_GAP,
-        },
-    })
-
-    self.settingsView:AddCheckboxButton({
+function UI:buildSettingsControls(host, controls)
+    controls = controls or {}
+    controls.options = host:AddCheckboxButton({
         {
             text = "Draw over scenery",
             value = "ignore_depth",
@@ -671,14 +708,8 @@ function UI:mountSettings(parent)
             end
         end,
     })
-    self.settingsView:AddText({
-        text = "Default marker colour and opacity",
-        width = 296,
-        height = 32,
-        maxLines = 1,
-    })
-    self.colourPicker = self.settingsView:AddColourPicker({
-        inline = true,
+    host:AddText("Default marker colour and opacity")
+    controls.colourPicker = host:AddColourPicker({
         width = 40,
         height = 32,
         value = self.currentStyle.outlineColour,
@@ -691,14 +722,15 @@ function UI:mountSettings(parent)
         end,
     })
 
-    self.thicknessText = self.settingsView:AddText({
+    controls.thicknessText = host:AddText({
         text = "",
-        width = 344,
+        width = SETTINGS_FIELD_WIDTH,
         height = 32,
         alignHorizontal = ui.AlignMode.CENTRE,
         maxLines = 1,
     })
-    self.thicknessSlider = self.settingsView:AddSlider({
+    controls.thicknessSlider = host:AddSlider({
+        width = SETTINGS_FIELD_WIDTH,
         min = 0,
         max = 10,
         step = 0.5,
@@ -712,9 +744,9 @@ function UI:mountSettings(parent)
             self:updateStyleControls()
         end,
     })
-    self.settingsView:AddText("Label size")
-    self.labelSizeCombo = self.settingsView:AddComboBox({
-        width = 344,
+    host:AddText("Label size")
+    controls.labelSizeCombo = host:AddComboBox({
+        width = SETTINGS_FIELD_WIDTH,
         entries = {},
         tooltip = "Set the label size for every tile marker.",
         onChange = function(_, entryID, _, eventType)
@@ -723,7 +755,7 @@ function UI:mountSettings(parent)
             PersistentDB:SetInt(FONT_SIZE_STORAGE_KEY, self.labelSize)
         end,
     })
-    local labelSizeRoot = self.labelSizeCombo and self.labelSizeCombo.root
+    local labelSizeRoot = controls.labelSizeCombo and controls.labelSizeCombo.root
     local requestedLabelSizeEntry = LABEL_SIZE_ENTRY_ID[self.labelSize]
     if labelSizeRoot ~= nil and requestedLabelSizeEntry ~= nil then
         local entries = {
@@ -741,9 +773,9 @@ function UI:mountSettings(parent)
                 LABEL_SIZE_SORTED_POSITION[requestedLabelSizeEntry])
         end
     end
-    self.settingsView:AddText("Tilemarking keybind")
-    self.settingsView:AddKeybindField({
-        width = 344,
+    host:AddText("Tilemarking keybind")
+    controls.keybind = host:AddKeybindField({
+        width = SETTINGS_FIELD_WIDTH,
         value = self.markingKeybind,
         defaultValue = DEFAULT_MARKING_KEYBIND,
         onChange = function(_, value)
@@ -751,8 +783,54 @@ function UI:mountSettings(parent)
             PersistentDB:SetStructuredData(MARKING_KEYBIND_STORAGE_KEY, value)
         end,
     })
-    self.settingsView:AddText("Right-click a tile while holding the keybind to mark it or edit its marker.")
+    host:AddText("Hold the tilemarking keybind and right-click a tile to mark it, edit its marker, or apply a saved tile style.")
 
+    return controls
+end
+
+function UI:mountSettingsTabs(host, activeIndex)
+    local layout = { settings = {} }
+    layout.tabs = host:AddTabs({
+        { text = "Settings" },
+        { text = "Style presets", scrollable = false },
+    }, {
+        absolute = true,
+        x = 0,
+        y = 0,
+        width = 0,
+        height = 0,
+        widthAnchor = 1,
+        heightAnchor = 1,
+        activeIndex = activeIndex or 1,
+        contentLayout = {
+            startY = 10,
+            paddingLeft = 12,
+            paddingRight = 12,
+            paddingBottom = 12,
+            rowGap = CONTROL_GAP,
+        },
+    })
+    self:buildSettingsControls(layout.tabs:GetPage(1), layout.settings)
+    layout.style = { host = layout.tabs:GetPage(2).content }
+    self:rebuildStyleContext(layout.style)
+    return layout
+end
+
+function UI:mountSettings(parent)
+    self:destroySettings()
+    self.settingsView = self.prettyui.SimpleView.new(parent, {
+        width = 0,
+        height = 0,
+        widthAnchor = 1,
+        heightAnchor = 1,
+        scrollable = false,
+    })
+    self.settingsLayout = self:mountSettingsTabs(self.settingsView, 1)
+    local controls = self.settingsLayout.settings
+    self.colourPicker = controls.colourPicker
+    self.thicknessText = controls.thicknessText
+    self.thicknessSlider = controls.thicknessSlider
+    self.labelSizeCombo = controls.labelSizeCombo
     self:updateStyleControls()
 end
 
@@ -780,16 +858,27 @@ function UI:mountContent(parent, focusPresetID)
     local view = self.contentView
     self.contentView:AddText({
         text = layout.heading,
-        width = -(layout.padding * 2 + buttonStep * 2),
+        width = -(layout.padding * 2 + buttonStep * 3),
         widthAnchor = 1,
         height = layout.headingHeight,
         maxLines = 1,
+    })
+    self.contentView:AddSpriteButton("SETTINGS", function()
+        self:openStyleManager()
+    end, {
+        inline = true,
+        x = -rightInset,
+        xAnchor = 1,
+        size = layout.size,
+        offsetY = (layout.headingHeight - layout.size) / 2,
+        tooltip = "Open Tile Marker settings",
+        disabled = self.styleHandlers == nil,
     })
     self.contentView:AddSpriteButton("PLUS", function()
         self:promptForPresetCreation(false)
     end, {
         inline = true,
-        x = -(rightInset + buttonStep),
+        x = -(rightInset + buttonStep * 2),
         xAnchor = 1,
         size = layout.size,
         offsetY = (layout.headingHeight - layout.size) / 2,
@@ -799,12 +888,37 @@ function UI:mountContent(parent, focusPresetID)
         self:promptForPresetImport()
     end, {
         inline = true,
-        x = -rightInset,
+        x = -(rightInset + buttonStep),
         xAnchor = 1,
         size = layout.size,
         offsetY = (layout.headingHeight - layout.size) / 2,
         tooltip = "Import preset",
     })
+    local hubTooltip = "Browse community presets from the RuneScape Wiki"
+    local canOpenHub = self.presetHub ~= nil and Plugin.HasPermission(PluginPermissions.httpAccess)
+    if self.presetHub ~= nil and not canOpenHub then
+        hubTooltip = "Enable the optional httpAccess permission for Tile Markers to browse wiki presets."
+    end
+    self.presetHubButton = self.contentView:AddSimpleButton("Preset hub", function()
+        self:openPresetHub()
+    end, {
+        width = view.contentWidth - layout.padding * 2,
+        disabled = not canOpenHub,
+        tooltip = canOpenHub and hubTooltip or nil,
+    })
+    if self.presetHub ~= nil and not canOpenHub then
+        -- Disabled SimpleButtons stop mouseover events. A sibling hover target
+        -- keeps permission guidance available without enabling the button.
+        local button = self.presetHubButton.root
+        local hover = self.prettyui.NewComponent(ui.Layer, view.content)
+        hover:SetPos(button.x, button.y)
+        hover:SetSize(button.width, button.height)
+        hover.enabled = true
+        hover.clickthrough = false
+        hover:Subscribe(ui.Hook.ONCLICK, function() return false end)
+        self.presetHubPermissionHover = hover
+        self.presetHubPermissionTooltip = self.prettyui.Tooltip.attach(hover, view.content, hubTooltip)
+    end
     self:rebuildPresetPanels(focusPresetID)
     view.root:Subscribe(ui.Hook.ONRESIZE, function()
         if self.contentView ~= view then return end
@@ -845,31 +959,549 @@ function UI:ensureMounted()
     return true
 end
 
+function UI:openPresetHub()
+    if self.presetHub == nil or not Plugin.HasPermission(PluginPermissions.httpAccess)
+        or not self:ensureMounted()
+        or self:isPromptOpen() or self.presetEditOverlay ~= nil then
+        return false
+    end
+    local parent = ui.Interfaces:GetComponent(
+        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+    if parent == nil then return false end
+    return self.presetHub:open(parent)
+end
 
 
-function UI:isPromptOpen()
+
+function UI:isPromptOpen(ignoreCustomization)
     return self.clearPromptWindow ~= nil
-        or self.colourPromptWindow ~= nil
+        or (not ignoreCustomization and self.colourPromptWindow ~= nil)
         or self.presetCreateWindow ~= nil
         or self.presetImportWindow ~= nil
         or self.presetRenameWindow ~= nil
         or self.presetExportWindow ~= nil
         or self.presetDeleteWindow ~= nil
+        or self.styleManagerWindow ~= nil
+        or self.styleDeleteWindow ~= nil
+        or (self.presetHub ~= nil and self.presetHub.window ~= nil)
 end
 
 local function trim(value)
     return tostring(value or ""):match("^%s*(.-)%s*$")
 end
 
-local function centredPopupPosition(self, width, height)
+local function escapedStyleName(name)
+    return tostring(name):gsub("[<>]", { ["<"] = "<lt>", [">"] = "<gt>" })
+end
+
+local function centredPopupPosition(self, width, height, parent)
+    parent = parent or self.gameArea
     return clamp(
-        math.floor((self.gameArea.width - width) / 2),
+        math.floor((parent.width - width) / 2),
         0,
-        math.max(0, self.gameArea.width - width)),
+        math.max(0, parent.width - width)),
         clamp(
-            math.floor((self.gameArea.height - height) / 2),
+            math.floor((parent.height - height) / 2),
             0,
-            math.max(0, self.gameArea.height - height))
+            math.max(0, parent.height - height))
+end
+
+local function syncStyleManagerAliases(self)
+    local context = self.styleManagerLayout and self.styleManagerLayout.style or nil
+    self.styleManagerView = context and context.view or nil
+    self.styleManagerCount = context and context.count or nil
+    self.styleManagerAdd = context and context.add or nil
+    self.styleManagerListScrollY = context and context.listScrollY or nil
+    self.styleFormState = context and context.formState or nil
+end
+
+local function newStyleManagerView(self, context, layout)
+    local view = self.prettyui.SimpleView.new(context.host, {
+        width = 0,
+        height = 0,
+        widthAnchor = 1,
+        heightAnchor = 1,
+        layout = layout,
+    })
+    context.view = view
+    syncStyleManagerAliases(self)
+    view.root:Subscribe(ui.Hook.ONRESIZE, function()
+        if context.view == view then view:Refresh() end
+    end)
+    return view
+end
+
+function UI:clearStyleContext(context)
+    if context == nil then return end
+    local state = context.formState
+    context.formState = nil
+    if state ~= nil and state.picker ~= nil then state.picker:Close() end
+    local view = context.view
+    context.view = nil
+    context.count = nil
+    context.add = nil
+    if view ~= nil then view:Destroy() end
+    syncStyleManagerAliases(self)
+end
+
+function UI:clearStyleManagerContent()
+    self:clearStyleContext(
+        self.styleManagerLayout and self.styleManagerLayout.style or nil)
+end
+
+function UI:closeStyleDelete()
+    local prompt = self.styleDeleteWindow
+    self.styleDeleteWindow = nil
+    self.styleDeleteID = nil
+    self.styleDeleteError = nil
+    self.styleDeleteContext = nil
+    if prompt ~= nil and prompt.root ~= nil then prompt:Close() end
+end
+
+releaseStyleContext = function(self, context)
+    if context == nil then return end
+    if self.styleDeleteContext == context then self:closeStyleDelete() end
+    self:clearStyleContext(context)
+    context.host = nil
+    context.listScrollY = nil
+end
+
+local function releaseStyleManager(self)
+    local layout = self.styleManagerLayout
+    self.styleManagerWindow = nil
+    if layout ~= nil then releaseStyleContext(self, layout.style) end
+    self.styleManagerLayout = nil
+    self.styleWindowParent = nil
+    syncStyleManagerAliases(self)
+    local controls = self.settingsLayout and self.settingsLayout.settings or nil
+    self.colourPicker = controls and controls.colourPicker or nil
+    self.thicknessText = controls and controls.thicknessText or nil
+    self.thicknessSlider = controls and controls.thicknessSlider or nil
+    self.labelSizeCombo = controls and controls.labelSizeCombo or nil
+end
+
+function UI:closeStyleManager()
+    local manager = self.styleManagerWindow
+    releaseStyleManager(self)
+    if manager ~= nil and manager.root ~= nil then manager:Close() end
+end
+
+local function rebuildOtherStyleContexts(self, changedContext)
+    local contexts = {
+        self.settingsLayout and self.settingsLayout.style or nil,
+        self.styleManagerLayout and self.styleManagerLayout.style or nil,
+    }
+    for _, context in pairs(contexts) do
+        if context ~= nil and context ~= changedContext
+            and context.formState == nil and context.host ~= nil then
+            self:rebuildStyleContext(context)
+        end
+    end
+end
+
+function UI:rebuildStyleContext(context, scrollY)
+    if context == nil or context.host == nil or self.styleHandlers == nil
+        or context.formState ~= nil then
+        return
+    end
+    scrollY = scrollY or (context.view and context.view.scrollY) or 0
+    self:clearStyleContext(context)
+    local view = newStyleManagerView(self, context, {
+        startY = 8,
+        paddingLeft = 8,
+        paddingRight = 8,
+        paddingBottom = 8,
+        rowGap = 4,
+    })
+    context.count = view:AddText({
+        text = "",
+        width = -64,
+        widthAnchor = 1,
+        height = 24,
+        maxLines = 1,
+    })
+    context.add = view:AddSpriteButton("PLUS", function()
+        self:openStyleFormIn(context)
+    end, {
+        inline = true,
+        x = -32,
+        xAnchor = 1,
+        size = 24,
+        tooltip = "Add tile style",
+    })
+
+    local styles = self.styleHandlers.list()
+    context.count.content = string.format(
+        "Saved styles: %d / %d", #styles, self.styleHandlers.maxStyles)
+    context.add:SetDisabled(#styles >= self.styleHandlers.maxStyles)
+    if #styles == 0 then
+        local row = view:AddPanel({
+            height = 40,
+            scrollable = false,
+            layout = { startY = 5, paddingLeft = 8, paddingRight = 8 },
+        })
+        row:AddText({ text = "No tile styles saved.", height = 24 })
+    end
+
+    for _, style in ipairs(styles) do
+        local styleID = style.id
+        local displayedName = escapedStyleName(style.name)
+        local row = view:AddPanel({
+            height = 46,
+            popout = false,
+            scrollable = false,
+            layout = {
+                startY = 7,
+                paddingLeft = 8,
+                paddingRight = 8,
+                paddingBottom = 0,
+                rowGap = 2,
+            },
+        })
+        local swatch = ui.Rectangle.new(row.content)
+        swatch:SetPos(8, 7)
+        swatch:SetSize(24, 24)
+        swatch.fill = true
+        swatch.rgba = style.outlineColour
+        swatch.clickthrough = true
+        row:AddText({
+            text = displayedName,
+            colour = labelColour(style.outlineColour) | 0xFF,
+            x = 40,
+            width = -104,
+            widthAnchor = 1,
+            height = 24,
+            marginBottom = 2,
+            maxLines = 1,
+            tooltip = displayedName,
+        })
+        row:AddSpriteButton("PENCIL", function()
+            self:openStyleFormIn(context, styleID)
+        end, {
+            inline = true,
+            x = -60,
+            xAnchor = 1,
+            size = 24,
+            marginBottom = 2,
+            tooltip = "Edit " .. displayedName,
+        })
+        row:AddSpriteButton("TRASH", function()
+            self:confirmStyleDeleteIn(context, styleID)
+        end, {
+            inline = true,
+            x = -32,
+            xAnchor = 1,
+            size = 24,
+            marginBottom = 2,
+            tooltip = "Delete " .. displayedName,
+        })
+    end
+    view:SetScrollPosition(scrollY)
+    syncStyleManagerAliases(self)
+end
+
+function UI:rebuildStyleManager(scrollY)
+    self:rebuildStyleContext(
+        self.styleManagerLayout and self.styleManagerLayout.style or nil,
+        scrollY)
+end
+
+function UI:openStyleManager(fromCustomization)
+    if self.styleHandlers == nil or not self:ensureMounted()
+        or self.presetEditOverlay ~= nil then
+        return false
+    end
+    if fromCustomization then
+        if self.colourPromptWindow == nil or self:isPromptOpen(true) then
+            return false
+        end
+    elseif self:isPromptOpen() then
+        return false
+    end
+    local parent = ui.Interfaces:GetComponent(
+        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+    if parent == nil then return false end
+    local width = math.min(SETTINGS_WINDOW_WIDTH, parent.width)
+    local height = math.min(SETTINGS_WINDOW_HEIGHT, parent.height)
+    local x, y = centredPopupPosition(self, width, height, parent)
+    local manager
+    manager = self.prettyui.Window.new(parent, {
+        title = "Tile Marker settings",
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        minWidth = math.min(420, width),
+        minHeight = math.min(360, height),
+        resizable = true,
+        destroyOnClose = true,
+        onClose = function()
+            if self.styleManagerWindow == manager then
+                releaseStyleManager(self)
+            end
+        end,
+    })
+    manager:SetScrollable(false)
+    self.styleWindowParent = parent
+    self.styleManagerWindow = manager
+    self.styleManagerLayout = self:mountSettingsTabs(
+        manager,
+        fromCustomization and 2 or 1)
+    syncStyleManagerAliases(self)
+    local controls = self.styleManagerLayout.settings
+    self.colourPicker = controls.colourPicker
+    self.thicknessText = controls.thicknessText
+    self.thicknessSlider = controls.thicknessSlider
+    self.labelSizeCombo = controls.labelSizeCombo
+    self:updateStyleControls()
+    return true
+end
+
+function UI:finishStyleFormIn(context, save)
+    local state = context and context.formState or nil
+    if state == nil then return false end
+    if save then
+        local name = trim(state.input:GetText())
+        local label = trim(state.labelInput:GetText())
+        if label == "" then label = nil end
+        local colour = state.picker:GetValue()
+        local fill = state.checks:IsSelected("fill")
+        local corners = state.checks:IsSelected("corners")
+        local success, result
+        if state.id == nil then
+            success, result = self.styleHandlers.create(
+                name, colour, fill, corners, label)
+        else
+            success, result = self.styleHandlers.update(
+                state.id, name, colour, fill, corners, label)
+        end
+        if not success then
+            state.error.content = escapedStyleName(
+                result or "Could not save tile style.")
+            return false
+        end
+    end
+    local scrollY = context.listScrollY or 0
+    self:clearStyleContext(context)
+    self:rebuildStyleContext(context, scrollY)
+    if save then rebuildOtherStyleContexts(self, context) end
+    return true
+end
+
+function UI:finishStyleForm(save)
+    return self:finishStyleFormIn(
+        self.styleManagerLayout and self.styleManagerLayout.style or nil,
+        save)
+end
+
+function UI:openStyleFormIn(context, styleID)
+    if context == nil or context.host == nil or context.formState ~= nil
+        or self.styleDeleteWindow ~= nil then
+        return false
+    end
+    local parent = ui.Interfaces:GetComponent(
+        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+    if parent == nil then return false end
+    local style = styleID and self.styleHandlers.get(styleID) or nil
+    if styleID ~= nil and style == nil then
+        self:rebuildStyleContext(context)
+        return false
+    end
+    if styleID == nil
+        and #self.styleHandlers.list() >= self.styleHandlers.maxStyles then
+        self:rebuildStyleContext(context)
+        return false
+    end
+
+    local state = { id = styleID }
+    local fill, corners
+    if style ~= nil then
+        fill, corners = style.fill, style.outlineCornersOnly
+    else
+        fill, corners = self.globalStyle.fill, self.globalStyle.outlineCornersOnly
+    end
+    context.listScrollY = (context.view and context.view.scrollY) or 0
+    self:clearStyleContext(context)
+    context.formState = state
+    syncStyleManagerAliases(self)
+    local view = newStyleManagerView(self, context, {
+        startY = 8,
+        paddingLeft = 12,
+        paddingRight = 12,
+        paddingBottom = 8,
+        rowGap = 6,
+    })
+    view:AddSpriteButton("BACK", function()
+        if context.formState == state then
+            self:finishStyleFormIn(context, false)
+        end
+    end, { size = 24, tooltip = "Back to tile styles" })
+    view:AddTitle({
+        text = style and "Edit tile style" or "Add tile style",
+        inline = true,
+        width = -48,
+        widthAnchor = 1,
+        height = 24,
+        maxLines = 1,
+    })
+    view:AddText("Style name")
+    state.input = view:AddTextField({
+        text = style and style.name or "",
+        placeholder = "Style name",
+        maxLength = 32,
+        onSubmit = function()
+            if context.formState == state then
+                self:finishStyleFormIn(context, true)
+            end
+        end,
+    })
+    view:AddText("Default tile label")
+    state.labelInput = view:AddTextField({
+        text = style and style.label or "",
+        placeholder = "Optional",
+        maxLength = 32,
+        onSubmit = function()
+            if context.formState == state then
+                self:finishStyleFormIn(context, true)
+            end
+        end,
+    })
+    view:AddText({
+        text = "Outline colour",
+        width = 220,
+        height = 32,
+        maxLines = 1,
+    })
+    state.picker = view:AddColourPicker({
+        inline = true,
+        width = 40,
+        height = 32,
+        value = style and style.outlineColour
+            or self.currentStyle.outlineColour,
+        alphaSlider = true,
+        windowTitle = "Tile style outline",
+        windowParent = parent,
+    })
+    state.checks = view:AddCheckboxButton({
+        { text = "Render fill", value = "fill", selected = fill },
+        {
+            text = "Draw outline corners only",
+            value = "corners",
+            selected = corners,
+        },
+    }, {})
+    state.error = view:AddText({
+        text = "",
+        colour = 0xFF8888FF,
+        height = 40,
+        maxLines = 2,
+    })
+    view:AddSimpleButton("Save", function()
+        if context.formState == state then self:finishStyleFormIn(context, true) end
+    end, { width = 142, height = 32 })
+    view:AddSimpleButton("Cancel", function()
+        if context.formState == state then self:finishStyleFormIn(context, false) end
+    end, { inline = true, width = 142, height = 32 })
+    return true
+end
+
+function UI:openStyleForm(styleID)
+    return self:openStyleFormIn(
+        self.styleManagerLayout and self.styleManagerLayout.style or nil,
+        styleID)
+end
+
+function UI:finishStyleDelete(confirmed)
+    local prompt = self.styleDeleteWindow
+    local context = self.styleDeleteContext
+    if prompt == nil then return false end
+    if confirmed then
+        local success, message = self.styleHandlers.delete(self.styleDeleteID)
+        if not success then
+            self.styleDeleteError.content = escapedStyleName(
+                message or "Could not delete tile style.")
+            return false
+        end
+    end
+    self:closeStyleDelete()
+    if confirmed then
+        self:rebuildStyleContext(context)
+        rebuildOtherStyleContexts(self, context)
+    end
+    return true
+end
+
+function UI:confirmStyleDeleteIn(context, styleID)
+    if context == nil or context.formState ~= nil
+        or self.styleDeleteWindow ~= nil then
+        return false
+    end
+    local parent = ui.Interfaces:GetComponent(
+        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+    if parent == nil then return false end
+    local style = self.styleHandlers.get(styleID)
+    if style == nil then
+        self:rebuildStyleContext(context)
+        return false
+    end
+    local width, height = 352, 216
+    local x, y = centredPopupPosition(self, width, height, parent)
+    local prompt
+    prompt = self.prettyui.Window.new(parent, {
+        title = "Delete tile style",
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        minWidth = width,
+        minHeight = height,
+        maxWidth = width,
+        maxHeight = height,
+        destroyOnClose = true,
+        onClose = function()
+            if self.styleDeleteWindow == prompt then
+                self.styleDeleteWindow = nil
+                self.styleDeleteID = nil
+                self.styleDeleteError = nil
+                self.styleDeleteContext = nil
+            end
+        end,
+        layout = {
+            startY = 10,
+            paddingLeft = 12,
+            paddingRight = 12,
+            rowGap = 8,
+        },
+    })
+    self.styleDeleteWindow = prompt
+    self.styleDeleteID = styleID
+    self.styleDeleteContext = context
+    prompt:AddText({
+        text = string.format(
+            "Delete \"%s\"? This cannot be undone. Existing tiles will keep their appearance.",
+            escapedStyleName(style.name)),
+        height = 56,
+        maxLines = 3,
+    })
+    self.styleDeleteError = prompt:AddText({
+        text = "",
+        colour = 0xFF8888FF,
+        height = 32,
+        maxLines = 2,
+    })
+    prompt:AddSimpleButton("Delete", function()
+        self:finishStyleDelete(true)
+    end, { width = 142, height = 32 })
+    prompt:AddSimpleButton("Cancel", function()
+        self:finishStyleDelete(false)
+    end, { inline = true, width = 142, height = 32 })
+    return true
+end
+
+function UI:confirmStyleDelete(styleID)
+    return self:confirmStyleDeleteIn(
+        self.styleManagerLayout and self.styleManagerLayout.style or nil,
+        styleID)
 end
 
 function UI:finishPresetCreation(accepted)
@@ -1367,7 +1999,7 @@ function UI:promptForCustomization(
     if self:isPromptOpen() or self.gameArea == nil then return false end
 
     local width = 384
-    local height = 328
+    local height = 376
     local x = clamp(
         math.floor((self.gameArea.width - width) / 2),
         0,
@@ -1446,15 +2078,15 @@ function UI:promptForCustomization(
         end,
     })
     prompt:AddText({
-        text = "Choose the tile outline colour.",
-        width = 296,
-        height = 32,
+        text = "Choose the tile outline colour:",
+        width = 300,
+        height = COLOUR_SWATCH_OUTER_SIZE,
         maxLines = 1,
     })
     self.colourPromptPicker = prompt:AddColourPicker({
         inline = true,
-        width = 40,
-        height = 32,
+        width = COLOUR_SWATCH_OUTER_SIZE,
+        height = COLOUR_SWATCH_OUTER_SIZE,
         value = self.colourPromptColour,
         alphaSlider = true,
         windowTitle = "Tile colour",
@@ -1463,23 +2095,34 @@ function UI:promptForCustomization(
             previewColourPrompt(self)
         end,
     })
+    self.colourPromptPicker.swatch:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+    self.colourPromptPicker.swatch:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
+    self.colourPromptPicker.swatchFrame:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+    self.colourPromptPicker.swatchFrame:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
     prompt:AddText("Recently used colours")
     for index, colour in ipairs(self.recentColours) do
         local button = prompt:AddSimpleButton("", function()
             self.colourPromptPicker:SetValue(colour)
         end, {
             inline = index > 1,
-            width = 32,
-            height = 32,
+            width = COLOUR_SWATCH_OUTER_SIZE,
+            height = COLOUR_SWATCH_OUTER_SIZE,
             tooltip = "Use recent colour",
         })
         local swatch = ui.Rectangle.new(button.root)
-        swatch:SetPos(4, 4)
-        swatch:SetSize(24, 24)
+        swatch:SetPos(COLOUR_SWATCH_INNER_PADDING, COLOUR_SWATCH_INNER_PADDING)
+        swatch:SetSize(COLOUR_SWATCH_INNER_SIZE, COLOUR_SWATCH_INNER_SIZE)
         swatch.fill = true
         swatch.rgba = colour
         swatch.clickthrough = true
     end
+    prompt:AddSimpleButton("Manage tile styles", function()
+        self:openStyleManager(true)
+    end, {
+        width = 344,
+        height = 28,
+        disabled = self.styleHandlers == nil,
+    })
     prompt:AddFancyButton("Confirm", function()
         self:finishColourPrompt(true)
     end, {

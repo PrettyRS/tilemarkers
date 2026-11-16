@@ -5,6 +5,8 @@ local UI = require("src/ui")
 local Minimenu = {}
 
 local EVENT_ID = "tileMarker"
+local STYLE_PARENT_LABEL = "Apply tile style"
+local STYLE_PARENT_PREFIX = STYLE_PARENT_LABEL .. " "
 local MENU_CURSOR_DEAD_ZONE_SQUARED = 16
 
 local menuHover = nil
@@ -35,15 +37,43 @@ local function hoveredTile()
     return ScreenConvert.ScreenToCoordGrid(mousePosition)
 end
 
-local function moveBelowNativeTop(miniMenu, nativeEntryCount, customCount)
-    if nativeEntryCount < 1 or customCount < 1 then return end
-    local totalEntryCount = nativeEntryCount + customCount
-    for customIndex = customCount, 1, -1 do
-        local targetIndex = totalEntryCount - customCount + customIndex - 1
-        for index = customIndex, targetIndex - 1 do
-            miniMenu:Swap(index, index + 1)
+local function moveMenuEntry(miniMenu, label, targetIndex, actionType, prefix)
+    for foundIndex, entry in ipairs(miniMenu.entries) do
+        local overrideText = entry.overrideText
+        if (actionType ~= nil and entry.actionType == actionType)
+                or overrideText == label
+                or entry.fullText == label
+                or entry.verbText == label
+                or (prefix ~= nil and type(overrideText) == "string"
+                    and overrideText:sub(1, #prefix) == prefix) then
+            local index = foundIndex
+            while index < targetIndex do
+                miniMenu:Swap(index, index + 1)
+                index = index + 1
+            end
+            while index > targetIndex do
+                miniMenu:Swap(index, index - 1)
+                index = index - 1
+            end
+            return true
         end
     end
+    return false
+end
+
+local function placeTileActions(miniMenu, primaryLabel, secondaryLabel, hasStyleMenu)
+    local cancelAtBottom = moveMenuEntry(
+        miniMenu, "Cancel", 1, MiniMenuActionType.CANCEL)
+    local nextIndex = cancelAtBottom and 2 or 1
+    if hasStyleMenu then
+        moveMenuEntry(miniMenu, STYLE_PARENT_LABEL, nextIndex, nil, STYLE_PARENT_PREFIX)
+        nextIndex = nextIndex + 1
+    end
+    if secondaryLabel ~= nil then
+        moveMenuEntry(miniMenu, secondaryLabel, nextIndex)
+        nextIndex = nextIndex + 1
+    end
+    moveMenuEntry(miniMenu, primaryLabel, nextIndex)
 end
 
 local function moveAboveNativeBottom(miniMenu, nativeEntryCount, customCount)
@@ -131,6 +161,39 @@ local function customizeTile(store, source)
         })
 end
 
+local function applyTileStyle(store, source, styleID)
+    if UI:isKeybindCapturing() or not store:contains(source) then return end
+    local style = actions.getStyle and actions.getStyle(styleID) or nil
+    if style == nil then return end
+
+    store:setCustomization(
+        source,
+        style.label or store:getLabel(source) or "",
+        style.outlineColour,
+        style.fill,
+        style.outlineCornersOnly)
+    UI:rememberColour(style.outlineColour)
+end
+
+local function styleMenuChildren(store, source)
+    local children = {}
+    for _, style in ipairs(actions.listStyles and actions.listStyles() or {}) do
+        local escapedName = style.name:gsub("[<>]", {
+            ["<"] = "<lt>",
+            [">"] = "<gt>",
+        })
+        children[#children + 1] = {
+            label = string.format(
+                "<col=%06X>%s</col>",
+                (style.outlineColour >> 8) & 0xFFFFFF,
+                escapedName),
+            action = applyTileStyle,
+            arguments = { store, source, style.id },
+        }
+    end
+    return children
+end
+
 local function onReady(miniMenuReadyEvent)
     local miniMenu = miniMenuReadyEvent.miniMenu
     local editStore = actions.editStore and actions.editStore() or nil
@@ -160,33 +223,49 @@ local function onReady(miniMenuReadyEvent)
         and actions.findPresetAt(source)
         or nil
 
-    local nativeEntryCount = miniMenu.entryCount
-    local customCount = 1
+    local primaryLabel, secondaryLabel
+    local marked = store:contains(source)
     if preset ~= nil and actions.startPresetEdit ~= nil then
+        primaryLabel = "Edit in preset"
         miniMenu:Add(
-            "Edit in preset",
+            primaryLabel,
             actions.startPresetEdit,
             preset.id,
             preset.name)
-    elseif store:contains(source) then
+    elseif marked then
+        primaryLabel = editStore and "Remove from preset" or "Unmark tile"
         miniMenu:Add(
-            editStore and "Remove from preset" or "Unmark tile",
+            primaryLabel,
             setTileMarked,
             store,
             source,
             false)
-        miniMenu:Add("Customize Tile", customizeTile, store, source)
-        customCount = 2
+        secondaryLabel = "Customize Tile"
+        miniMenu:Add(secondaryLabel, customizeTile, store, source)
     else
+        primaryLabel = editStore and "Add to preset" or "Mark tile"
         miniMenu:Add(
-            editStore and "Add to preset" or "Mark tile",
+            primaryLabel,
             setTileMarked,
             store,
             source,
             true)
     end
 
-    moveBelowNativeTop(miniMenu, nativeEntryCount, customCount)
+    local hasStyleMenu = false
+    if preset == nil and marked then
+        local children = styleMenuChildren(store, source)
+        if #children > 0 then
+            UI.prettyui.MiniMenu.AddSubmenu(
+                miniMenu, STYLE_PARENT_LABEL, children, {
+                    title = "Tile styles",
+                    position = "bottom",
+                })
+            hasStyleMenu = true
+        end
+    end
+    -- AddSubmenu can rebuild the native entries; place actions after every Add.
+    placeTileActions(miniMenu, primaryLabel, secondaryLabel, hasStyleMenu)
 end
 
 local function onClosed()
