@@ -74,6 +74,7 @@ local function control(options)
         self.texts[#self.texts + 1] = text
         return text
     end
+    function widget:AddTitle(value) return self:AddText(value) end
     function widget:AddPanel(panelOptions)
         local panel = control(panelOptions)
         self.rows[#self.rows + 1] = panel
@@ -94,6 +95,40 @@ local function control(options)
         function button:SetDisabled(value) self.disabled = value end
         self.spriteButtons[sprite] = button
         return button
+    end
+    function widget:AddSlider(sliderOptions)
+        local slider = { options = sliderOptions }
+        self.slider = slider
+        return slider
+    end
+    function widget:AddComboBox(comboOptions)
+        local combo = { options = comboOptions, root = {} }
+        function combo.root:SetEntries(entries, selected)
+            self.entries, self.selected = entries, selected
+        end
+        self.combo = combo
+        return combo
+    end
+    function widget:AddKeybindField(keybindOptions)
+        local field = { options = keybindOptions }
+        self.keybind = field
+        return field
+    end
+    function widget:AddTabs(entries, tabOptions)
+        local tabs = {
+            entries = entries,
+            options = tabOptions,
+            activeIndex = tabOptions.activeIndex or 1,
+            pages = {},
+        }
+        for index = 1, #entries do
+            tabs.pages[index] = control(tabOptions.contentLayout)
+        end
+        function tabs:GetPage(index) return self.pages[index] end
+        function tabs:GetActiveIndex() return self.activeIndex end
+        function tabs:SetActive(index) self.activeIndex = index end
+        self.tabs = tabs
+        return tabs
     end
     function widget:AddTextField(fieldOptions)
         local field = { value = fieldOptions.text or "", options = fieldOptions }
@@ -168,6 +203,11 @@ UI.styleHandlers = {
 }
 UI.currentStyle = Styles.fromColour(Styles.DEFAULT_OUTLINE)
 UI.globalStyle = { fill = false, outlineCornersOnly = false }
+UI.ignoreDepth = false
+UI.hoverPreviewEnabled = true
+UI.outlineThickness = 2
+UI.labelSize = 19
+UI.markingKeybind = { GameKey.CONTROL, GameKey.SHIFT }
 UI.gameArea = { width = 900, height = 700 }
 UI.recentColours = {}
 UI.ensureMounted = function() return true end
@@ -183,20 +223,48 @@ local function currentRow(window, position)
     error("No live style row at position " .. position)
 end
 
+local nativeSettingsParent = { width = 640, height = 480 }
+UI:mountSettings(nativeSettingsParent)
+local nativeTabs = UI.settingsLayout.tabs
+equal(1, nativeTabs:GetActiveIndex(), "native settings opens the settings tab")
+equal("Settings", nativeTabs.entries[1].text, "native settings reuses the settings tab")
+equal("Style presets", nativeTabs.entries[2].text, "native settings reuses the styles tab")
+equal(6, #UI.settingsLayout.style.view.rows,
+    "native style-presets tab contains the saved style list")
+
 UI:mountContent({ width = 640, height = 480 })
 local manageStyles = UI.contentView.spriteButtons.SETTINGS
 assert(manageStyles, "content panel exposes a style-manager action")
+equal("Open Tile Marker settings", manageStyles.options.tooltip,
+    "content-panel cog describes the settings window")
+local addPreset = UI.contentView.spriteButtons.PLUS
+local importPreset = UI.contentView.spriteButtons.IMPORT
+assert(addPreset.options.x < importPreset.options.x
+    and importPreset.options.x < manageStyles.options.x,
+    "settings cog is the final header action")
 topLayer = nil
 manageStyles.click()
 equal(nil, UI.styleManagerWindow, "missing foreground layer never opens a hidden manager")
 topLayer = { width = 900, height = 700 }
 manageStyles.click()
 local manager = UI.styleManagerWindow
-assert(manager, "content-panel action opens the manager")
+assert(manager, "content-panel action opens the settings window")
+equal(520, manager.options.width, "content-panel settings window uses the larger layout")
+equal(1, manager.tabs:GetActiveIndex(), "content-panel cog opens regular settings")
+equal(true, manager.tabs.options.absolute, "tabs opt out of padded window flow")
+equal(0, manager.tabs.options.x, "tabs start at the window content edge")
+equal(0, manager.tabs.options.y, "tabs start at the window content top")
+equal("Settings", manager.tabs.entries[1].text, "first tab contains marker settings")
+equal("Style presets", manager.tabs.entries[2].text, "second tab contains saved styles")
+local settingsPage = manager.tabs:GetPage(1)
+equal(320, settingsPage.slider.options.width, "thickness slider stays compact")
+equal(320, settingsPage.combo.options.width, "label-size combo stays compact")
+equal(320, settingsPage.keybind.options.width, "keybind field stays compact")
+local stylePage = manager.tabs:GetPage(2)
 local list = UI.styleManagerView
-equal(manager.content, list.parent, "style list is inside the manager window")
-equal(false, manager.scrollable, "only the current manager page scrolls")
-equal(true, UI:isPromptOpen(), "manager suppresses tile context actions")
+equal(stylePage.content, list.parent, "style list is inside its tab page")
+equal(false, manager.scrollable, "only the current tab page scrolls")
+equal(true, UI:isPromptOpen(), "settings window suppresses tile context actions")
 equal(6, #list.rows, "starter styles appear in management list")
 equal(false, list.spriteButtons.PLUS.disabled, "initial capacity allows adding")
 local originalDangerRow = list.rows[2]
@@ -214,7 +282,8 @@ originalDangerRow.spriteButtons.PENCIL.click()
 local form = UI.styleManagerView
 equal(manager, UI.styleManagerWindow, "editing reuses the manager window")
 equal(windowCount, windowsCreated, "editing does not open another window")
-equal("Edit tile style", manager.title, "manager title reflects editing")
+equal("Tile Marker settings", manager.title, "window title remains stable while editing")
+equal("Edit tile style", form.texts[1].content, "style tab identifies the edit form")
 equal(true, list.destroyed, "the editor replaces the style list")
 assert(form.spriteButtons.BACK, "editor has a top-left back button")
 equal(nil, form.spriteButtons.PLUS, "edit view replaces add action")
@@ -228,7 +297,7 @@ form.checks:SetSelected("fill", false)
 form.checks:SetSelected("corners", true)
 form.buttons.Save.click()
 equal(nil, UI.styleFormState, "save returns to the list")
-equal("Tile styles", manager.title, "returning restores the manager title")
+equal("Tile Marker settings", manager.title, "returning keeps the settings window title")
 equal(true, form.picker.closed, "returning closes the colour picker")
 equal(true, form.destroyed, "editor controls are released")
 equal("Hazard", SavedStyles:get("style_2").name, "renamed starter is persisted")
@@ -265,7 +334,7 @@ equal(nil, SavedStyles:get("style_2").label,
 UI.styleManagerView.spriteButtons.PLUS.click()
 form = UI.styleManagerView
 equal(windowCount, windowsCreated, "adding also stays within the manager window")
-equal("Add tile style", manager.title, "manager title reflects creation")
+equal("Add tile style", form.texts[1].content, "style tab identifies the creation form")
 form.input.value = "Hazard"
 form.buttons.Save.click()
 equal(true, form.texts[#form.texts].content:find("already exists", 1, true) ~= nil,
@@ -339,6 +408,8 @@ UI.colourPromptLabelInput.value = "Pending"
 UI.colourPromptLabelInput.options.onChange()
 tilePrompt.buttons["Manage tile styles"].click()
 assert(UI.styleManagerWindow, "tile customization opens style management")
+equal(2, UI.styleManagerLayout.tabs:GetActiveIndex(),
+    "manage tile styles opens the style-presets tab")
 equal(tilePrompt, UI.colourPromptWindow,
     "opening style management preserves the customization dialog")
 equal("Pending", UI.colourPromptLabelInput:GetText(),
