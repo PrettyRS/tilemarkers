@@ -4,7 +4,7 @@ local TILE_SIZE = 512.0
 local HALF_TILE = TILE_SIZE * 0.5
 local OUTLINE_HEIGHT_BIAS = 1.0
 local HEIGHT_OFFSET = 30.0
-local DEFAULT_FILL_OPACITY = 0.55
+local DEFAULT_FILL_ALPHA = 0x8C
 local DEFAULT_LINE_WIDTH = 2.0
 local OUTLINE_INSET_PROBE = 64.0
 local MAX_OUTLINE_INSET = HALF_TILE - 1.0
@@ -76,23 +76,6 @@ local function setShape(entry, part, shapeData)
         return false
     end
     return true
-end
-
-local function alphaByte(opacity)
-    return math.floor(clamp(tonumber(opacity) or 1.0, 0.0, 1.0) * 255.0 + 0.5)
-end
-
-local function splitColour(colour, fallback, opacity, defaultOpacity)
-    colour = math.floor(tonumber(colour) or fallback)
-    local rgb
-    local embeddedOpacity
-    if colour > 0xFFFFFF then
-        rgb = (colour >> 8) & 0xFFFFFF
-        embeddedOpacity = (colour & 0xFF) / 255.0
-    else
-        rgb = colour & 0xFFFFFF
-    end
-    return rgb, alphaByte(opacity ~= nil and opacity or embeddedOpacity or defaultOpacity)
 end
 
 local function copyPosition(position, heightBias)
@@ -397,16 +380,13 @@ local function updateSplit(entry, signature)
 end
 
 local function normaliseStyle(settings)
-    local outlineRGB, outlineAlpha = splitColour(
-        settings.outlineColour, 0xFFFFFFFF, settings.outlineOpacity, 1.0)
-    local fillRGB, fillAlpha = splitColour(
-        settings.fillColour or outlineRGB, outlineRGB,
-        settings.fillOpacity, DEFAULT_FILL_OPACITY)
+    local outlineRGBA = settings.outlineColour or 0xFFFFFFFF
+    local fillRGBA = settings.fillColour or ((outlineRGBA & 0xFFFFFF00) | DEFAULT_FILL_ALPHA)
     local fillEnabled = settings.fill == true
         or (settings.fill == nil and settings.fillColour ~= nil)
     return {
-        outlineRGBA = settings.outline ~= false and ((outlineRGB << 8) | outlineAlpha) or nil,
-        fillRGBA = fillEnabled and ((fillRGB << 8) | fillAlpha) or nil,
+        outlineRGBA = settings.outline ~= false and outlineRGBA or nil,
+        fillRGBA = fillEnabled and fillRGBA or nil,
         cornersOnly = settings.outlineCornersOnly == true,
         lineWidth = clamp(tonumber(settings.outlineThickness) or DEFAULT_LINE_WIDTH, 0.0, 10.0),
         ignoreDepth = settings.ignoreDepth == true,
