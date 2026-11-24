@@ -113,7 +113,7 @@ for level = 0, 3 do
         submitted, projected = {}, {}
         slope = 1
         local settings = {
-            coordGrid = coord(level, minX, minZ), outlineColour = 0x112233,
+            coordGrid = coord(level, minX, minZ), outlineColour = 0x112233FF,
             fill = true, outlineCornersOnly = cornersOnly, drawDistance = 15360,
         }
         assert(Draw.Sync{ settings })
@@ -135,8 +135,8 @@ for level = 0, 3 do
         submitted, projected = {}, {}
         local desired = {
             settings,
-            { coordGrid = coord(level, minX + 512, minZ), outlineColour = 0xAABBCC },
-            { coordGrid = coord(level, minX, minZ + 512), outlineColour = 0xAABBCC },
+            { coordGrid = coord(level, minX + 512, minZ), outlineColour = 0xAABBCCFF },
+            { coordGrid = coord(level, minX, minZ + 512), outlineColour = 0xAABBCCFF },
         }
         assert(Draw.Sync(desired))
         local centre = centreShapes()

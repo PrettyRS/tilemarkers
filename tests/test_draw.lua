@@ -104,13 +104,13 @@ end
 package.loaded["src/draw"] = nil
 local Draw = require("src/draw")
 local westCoord, eastCoord = coord(10, 14), coord(11, 14)
-local west = marker(westCoord, 0x112233)
+local west = marker(westCoord, 0x00FF44FF)
 local playerPosition = vector(10 * 512, 0, 14 * 512)
 west.fill = true
 assert(Draw.Sync{ west })
 local westMain = shapeWithLines(westCoord, 8)
-expect(westMain.shapeData.rgba[1], 0x112233FF, "outline defaults opaque")
-expect(westMain.shapeData.rgba[5], 0x1122338C, "fill defaults to 55 percent")
+expect(westMain.shapeData.rgba[1], 0x00FF44FF, "a zero red byte does not shift the outline channels")
+expect(westMain.shapeData.rgba[5], 0x00FF448C, "default fill keeps the outline RGB at 55 percent opacity")
 expect(#westMain.shapeData.tris, 6, "fill has two triangles")
 expect(westMain.shapeData.positions[1].x, -256, "mesh starts at local tile edge")
 
@@ -120,15 +120,17 @@ expectRetained(before, "ordinary markers do no per-frame mesh work")
 expect(stats.projections, before.projections, "ordinary markers need no camera projections")
 -- Different input objects with equivalent normalized styles are still unchanged.
 assert(Draw.Sync{ {
-    coordGrid = coord(10, 14), outlineColour = 0x112233FF, fill = true,
+    coordGrid = coord(10, 14), outlineColour = 0x00FF44FF, fill = true,
     outlineThickness = "4", drawDistance = 15360,
 } })
 expectRetained(before, "equivalent desired set preserves native state")
 
-west.outlineColour = 0x11223320
+west.outlineColour = 0x00FF4420
+west.fillColour = 0x00CC368C
 assert(Draw.Sync{ west })
 expect(shapesAt(westCoord)[1], westMain, "colour changes retain the fixed entity")
-expect(westMain.shapeData.rgba[1], 0x11223320, "embedded outline alpha is retained")
+expect(westMain.shapeData.rgba[1], 0x00FF4420, "embedded outline alpha is retained")
+expect(westMain.shapeData.rgba[5], 0x00CC368C, "a zero red byte does not shift the fill channels")
 west.fill = false
 west.outlineCornersOnly = true
 assert(Draw.Sync{ west })
@@ -147,10 +149,10 @@ expectRetained(before, "repeating property edits is a no-op")
 
 Draw.Reset()
 submitted = {}
-west = marker(westCoord, 0x556677)
-local east = marker(eastCoord, 0xAABBCC)
+west = marker(westCoord, 0x556677FF)
+local east = marker(eastCoord, 0xAABBCCFF)
 local plainCoord = coord(30, 30)
-local plain = marker(plainCoord, 0xABCDEF)
+local plain = marker(plainCoord, 0xABCDEFFF)
 assert(Draw.Sync{ west, east, plain })
 westMain = shapeWithLines(westCoord, 6)
 local eastMain = shapeWithLines(eastCoord, 6)
@@ -192,11 +194,11 @@ Draw.Reset()
 submitted = {}
 zoom = 1
 local centreCoord = coord(50, 50)
-local centre = marker(centreCoord, 0x111111)
-local north = marker(coord(50, 51), 0x222222)
-local south = marker(coord(50, 49), 0x333333)
-local left = marker(coord(49, 50), 0x444444)
-local right = marker(coord(51, 50), 0x555555)
+local centre = marker(centreCoord, 0x111111FF)
+local north = marker(coord(50, 51), 0x222222FF)
+local south = marker(coord(50, 49), 0x333333FF)
+local left = marker(coord(49, 50), 0x444444FF)
+local right = marker(coord(51, 50), 0x555555FF)
 assert(Draw.Sync{ centre, north, south, left, right })
 expect(#shapesAt(centreCoord), 1, "four split edges need no invalid empty main shape")
 local centreSplit = shapeWithLines(centreCoord, 8)
@@ -228,10 +230,10 @@ expect(submitted[1].destroyed, true, "failed native entity is released")
 assert(Draw.Sync{ west }, "retry configures the requested tile")
 local recovered = shapeWithLines(westCoord, 8)
 failUploads = 1
-west.outlineColour = 0x987654
+west.outlineColour = 0x987654FF
 assert(not Draw.Sync{ west })
 expect(recovered.destroyed, true, "failed replacement does not leave an invalid retained entity")
-west.outlineColour = 0x556677
+west.outlineColour = 0x556677FF
 assert(Draw.Sync{ west }, "reverting after a failed upload still recreates missing geometry")
 expect(shapeWithLines(westCoord, 8).shapeData.rgba[1], 0x556677FF, "recovered marker has the requested style")
 assert(Draw.Sync{})
@@ -240,9 +242,9 @@ for _, shape in ipairs(submitted) do
 end
 Draw.Reset()
 submitted = {}
-west = marker(westCoord, 0x112233)
-east = marker(eastCoord, 0x112233)
-plain = marker(plainCoord, 0xABCDEF)
+west = marker(westCoord, 0x112233FF)
+east = marker(eastCoord, 0x112233FF)
+plain = marker(plainCoord, 0xABCDEFFF)
 assert(Draw.Sync{ west, east, plain })
 plainShape = shapeWithLines(plainCoord, 8)
 west.outlineColour = 0x44556680
@@ -290,7 +292,7 @@ checkVisible(minX + 512 + 101, minZ + 256, true)
 assert(Draw.Sync{ west })
 east.outlineColour = west.outlineColour
 assert(Draw.Sync{ west, east })
-east.outlineColour = 0xABCDEF
+east.outlineColour = 0xABCDEFFF
 assert(Draw.Sync{ west, east })
 expect(shapeWithLines(westCoord, 4).visible, true, "new split geometry inherits visibility")
 Draw.Reset()
