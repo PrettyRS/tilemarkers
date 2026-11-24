@@ -254,7 +254,7 @@ equal(1, #requests, 'opening starts one request')
 requests[1].successful = true
 requests[1].responseCode = 200
 requests[1].data = string.format(
-    '{"bucket":[{"title":"Route","author":"Author","page_name":"User:Wiki","token":"%s"}]}', token)
+    '{"bucket":[{"location":"Route","author":"Author","page_name":"User:Wiki","token":"%s"}]}', token)
 requests[1].callback(requests[1])
 equal(true, networkHub.refreshButton.disabled, 'completed fetch remains disabled during cooldown')
 local view = networkHub.results
